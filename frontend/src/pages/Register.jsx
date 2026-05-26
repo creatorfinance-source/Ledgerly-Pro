@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
+import { BACKEND_URL } from "@/lib/api";
 
 export default function Register() {
   const { registerEmail } = useAuth();
@@ -29,9 +30,7 @@ export default function Register() {
   };
 
   const onGoogle = () => {
-    // REMINDER: DO NOT HARDCODE THE URL, OR ADD ANY FALLBACKS OR REDIRECT URLS, THIS BREAKS THE AUTH
-    const redirectUrl = window.location.origin + "/dashboard";
-    window.location.href = `https://auth.emergentagent.com/?redirect=${encodeURIComponent(redirectUrl)}`;
+    window.location.href = `${BACKEND_URL}/api/auth/google/login`;
   };
 
   return (

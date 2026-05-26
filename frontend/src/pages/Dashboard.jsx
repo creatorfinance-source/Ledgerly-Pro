@@ -27,14 +27,42 @@ function KPI({ label, value, hint, icon: Icon, accent = false, testid }) {
 
 export default function Dashboard() {
   const [data, setData] = useState(null);
+  const [error, setError] = useState(null);
   useEffect(() => {
-    api.get("/dashboard/summary").then((r) => setData(r.data));
+    api.get("/dashboard/summary")
+      .then((r) => setData(r.data))
+      .catch(() => setError("Could not load dashboard data. Make sure the backend is running."));
   }, []);
+
+  if (error) {
+    return (
+      <div className="p-8 flex flex-col items-center justify-center min-h-[60vh]" data-testid="dashboard-error">
+        <div className="w-12 h-12 rounded-full bg-[#FBEDE9] flex items-center justify-center mb-4">
+          <TrendingUp className="w-5 h-5 text-terracotta" />
+        </div>
+        <div className="text-lg font-medium text-[#1A1A1A]" style={{ fontFamily: "Outfit" }}>Dashboard unavailable</div>
+        <div className="mt-1 text-sm text-[#5C5C5C] max-w-sm text-center">{error}</div>
+        <button
+          className="mt-4 px-4 py-2 rounded-md bg-moss text-white text-sm hover:bg-[#3D5247] transition-colors"
+          onClick={() => { setError(null); setData(null); api.get("/dashboard/summary").then((r) => setData(r.data)).catch(() => setError("Could not load dashboard data.")); }}
+        >
+          Retry
+        </button>
+      </div>
+    );
+  }
 
   if (!data) {
     return (
-      <div className="p-8" data-testid="dashboard-loading">
-        <div className="text-sm text-[#5C5C5C]">Loading dashboard…</div>
+      <div className="p-8 flex flex-col gap-6" data-testid="dashboard-loading">
+        <div className="h-8 w-56 bg-[#F2F0ED] rounded animate-pulse" />
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          {[1,2,3,4].map(i => <div key={i} className="h-28 bg-[#F2F0ED] rounded-lg animate-pulse" />)}
+        </div>
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <div className="h-80 bg-[#F2F0ED] rounded-lg animate-pulse lg:col-span-2" />
+          <div className="h-80 bg-[#F2F0ED] rounded-lg animate-pulse" />
+        </div>
       </div>
     );
   }

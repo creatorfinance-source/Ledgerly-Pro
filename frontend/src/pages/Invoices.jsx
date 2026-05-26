@@ -38,8 +38,12 @@ export default function Invoices() {
   const [view, setView] = useState(null);
 
   const load = async () => {
-    const { data } = await api.get("/invoices");
-    setItems(data);
+    try {
+      const { data } = await api.get("/invoices");
+      setItems(data);
+    } catch {
+      toast.error("Failed to load invoices");
+    }
   };
 
   useEffect(() => { load(); }, []);
@@ -158,7 +162,13 @@ export default function Invoices() {
             </thead>
             <tbody>
               {items.length === 0 ? (
-                <tr><td colSpan="7" className="px-6 py-12 text-center text-[#5C5C5C]">No invoices yet.</td></tr>
+                <tr><td colSpan="7" className="px-6 py-16 text-center">
+                  <div className="flex flex-col items-center gap-2">
+                    <div className="w-10 h-10 rounded-full bg-[#F2F0ED] flex items-center justify-center"><FileText className="w-5 h-5 text-[#5C5C5C]" strokeWidth={1.5} /></div>
+                    <div className="text-sm font-medium text-[#1A1A1A]">No invoices yet</div>
+                    <div className="text-xs text-[#5C5C5C]">Create your first invoice to get started.</div>
+                  </div>
+                </td></tr>
               ) : items.map((inv) => (
                 <tr key={inv.invoice_id} className="border-t border-cream hover:bg-[#F9F8F6]">
                   <td className="px-6 py-3 numeric text-[#1A1A1A] font-medium cursor-pointer" onClick={() => setView(inv)} data-testid={`view-inv-${inv.invoice_id}`}>{inv.number}</td>

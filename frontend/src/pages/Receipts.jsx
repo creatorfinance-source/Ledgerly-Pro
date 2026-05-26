@@ -25,7 +25,13 @@ export default function Receipts() {
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState(DEFAULT());
 
-  const load = async () => setItems((await api.get("/receipts")).data);
+  const load = async () => {
+    try {
+      setItems((await api.get("/receipts")).data);
+    } catch {
+      toast.error("Failed to load receipts");
+    }
+  };
   useEffect(() => { load(); }, []);
 
   const subtotal = form.line_items.reduce((s, li) => s + (Number(li.quantity || 0) * Number(li.unit_price || 0)), 0);
@@ -123,7 +129,13 @@ export default function Receipts() {
             </thead>
             <tbody>
               {items.length === 0 ? (
-                <tr><td colSpan="6" className="px-6 py-12 text-center text-[#5C5C5C]">No receipts yet.</td></tr>
+                <tr><td colSpan="6" className="px-6 py-16 text-center">
+                  <div className="flex flex-col items-center gap-2">
+                    <div className="w-10 h-10 rounded-full bg-[#F2F0ED] flex items-center justify-center"><Plus className="w-5 h-5 text-[#5C5C5C]" strokeWidth={1.5} /></div>
+                    <div className="text-sm font-medium text-[#1A1A1A]">No receipts yet</div>
+                    <div className="text-xs text-[#5C5C5C]">Create your first receipt to get started.</div>
+                  </div>
+                </td></tr>
               ) : items.map((r) => (
                 <tr key={r.receipt_id} className="border-t border-cream hover:bg-[#F9F8F6]">
                   <td className="px-6 py-3 numeric text-[#1A1A1A] font-medium">{r.number}</td>

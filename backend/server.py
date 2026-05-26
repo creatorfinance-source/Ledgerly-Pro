@@ -3,11 +3,16 @@ from __future__ import annotations
 
 import os
 import uuid
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import List, Optional
 
 from dotenv import load_dotenv
+
+# Allow OAuth over http://localhost in development
+os.environ.setdefault("OAUTHLIB_INSECURE_TRANSPORT", "1")
+
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import RedirectResponse
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -57,7 +62,16 @@ if mongo_tls_allow_invalid_certificates:
 client = AsyncIOMotorClient(mongo_url, **mongo_client_kwargs)
 db = client[os.environ["DB_NAME"]]
 
-app = FastAPI(title="Ledgerly Finance API")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup logic can go here
+    yield
+    # Shutdown logic
+    client.close()
+
+
+app = FastAPI(title="Ledgerly Finance API", lifespan=lifespan)
 api = APIRouter(prefix="/api")
 
 
@@ -119,6 +133,96 @@ async def ensure_seed_accounts(user_id: str):
 @api.get("/")
 async def root():
     return {"app": "Ledgerly Finance", "status": "ok"}
+
+
+def _google_auth_redirect_uri(request: Request) -> str:
+    base = os.environ.get("APP_BASE_URL") or f"{request.url.scheme}://{request.url.netloc}"
+    return f"{base}/api/auth/google/callback"
+
+
+@api.get("/auth/google/login")
+async def auth_google_login(request: Request):
+    if not (GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET):
+        raise HTTPException(status_code=400, detail="Google OAuth not configured")
+    from google_auth_oauthlib.flow import Flow
+    flow = Flow.from_client_config(
+        {
+            "web": {
+                "client_id": GOOGLE_OAUTH_CLIENT_ID,
+                "client_secret": GOOGLE_OAUTH_CLIENT_SECRET,
+                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                "token_uri": "https://oauth2.googleapis.com/token",
+            }
+        },
+        scopes=["openid", "https://www.googleapis.com/auth/userinfo.email", "https://www.googleapis.com/auth/userinfo.profile"],
+    )
+    flow.redirect_uri = _google_auth_redirect_uri(request)
+    auth_url, state = flow.authorization_url(prompt="select_account")
+    await db.google_auth_state.update_one(
+        {"state": state},
+        {"$set": {
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "code_verifier": flow.code_verifier,
+        }},
+        upsert=True,
+    )
+    return RedirectResponse(url=auth_url)
+
+
+@api.get("/auth/google/callback")
+async def auth_google_callback(request: Request, code: Optional[str] = None, state: Optional[str] = None):
+    if not code or not state:
+        raise HTTPException(status_code=400, detail="Missing code/state")
+    
+    # Verify state
+    sd = await db.google_auth_state.find_one({"state": state})
+    if not sd:
+        raise HTTPException(status_code=400, detail="Invalid state")
+    await db.google_auth_state.delete_one({"state": state})
+
+    from google_auth_oauthlib.flow import Flow
+    flow = Flow.from_client_config(
+        {
+            "web": {
+                "client_id": GOOGLE_OAUTH_CLIENT_ID,
+                "client_secret": GOOGLE_OAUTH_CLIENT_SECRET,
+                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                "token_uri": "https://oauth2.googleapis.com/token",
+            }
+        },
+        scopes=["openid", "https://www.googleapis.com/auth/userinfo.email", "https://www.googleapis.com/auth/userinfo.profile"],
+        state=state,
+    )
+    flow.redirect_uri = _google_auth_redirect_uri(request)
+    flow.code_verifier = sd.get("code_verifier")
+    flow.fetch_token(authorization_response=str(request.url))
+    
+    # Get user info from ID token or userinfo endpoint
+    from googleapiclient.discovery import build
+    service = build("oauth2", "v2", credentials=flow.credentials)
+    user_info = service.userinfo().get().execute()
+    
+    email = user_info.get("email")
+    name = user_info.get("name", "")
+    picture = user_info.get("picture", "")
+
+    if not email:
+        raise HTTPException(status_code=400, detail="Could not get email from Google")
+
+    user = await upsert_user(
+        db,
+        email=email,
+        name=name,
+        picture=picture,
+        provider="google",
+    )
+    await ensure_seed_accounts(user["user_id"])
+    token = create_jwt(user["user_id"])
+    
+    # Redirect to frontend with token
+    # We use hash fragment so the token doesn't stay in browser history as much as query params
+    frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:3000")
+    return RedirectResponse(url=f"{frontend_url}/auth-callback#token={token}")
 
 
 @api.post("/auth/register")
@@ -660,7 +764,13 @@ async def sheets_connect(request: Request, user: dict = Depends(current_user)):
     flow.redirect_uri = _redirect_uri(request)
     auth_url, state = flow.authorization_url(prompt="consent", access_type="offline", state=user["user_id"])
     await db.google_oauth_state.update_one(
-        {"user_id": user["user_id"]}, {"$set": {"state": state, "created_at": datetime.now(timezone.utc).isoformat()}}, upsert=True
+        {"user_id": user["user_id"]},
+        {"$set": {
+            "state": state,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "code_verifier": flow.code_verifier,
+        }},
+        upsert=True,
     )
     return {"authorize_url": auth_url}
 
@@ -686,7 +796,8 @@ async def sheets_callback(request: Request, code: Optional[str] = None, state: O
         state=sd["state"],
     )
     flow.redirect_uri = _redirect_uri(request)
-    flow.fetch_token(code=code)
+    flow.code_verifier = sd.get("code_verifier")
+    flow.fetch_token(authorization_response=str(request.url))
     creds = flow.credentials
     await db.google_sheets_tokens.update_one(
         {"user_id": state},
@@ -699,8 +810,57 @@ async def sheets_callback(request: Request, code: Optional[str] = None, state: O
         }},
         upsert=True,
     )
-    base = os.environ.get("APP_BASE_URL") or f"{request.url.scheme}://{request.url.netloc}"
-    return RedirectResponse(url=f"{base.replace('/api','')}/integrations?sheets=connected")
+    frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:3000")
+    return RedirectResponse(url=f"{frontend_url}/integrations?sheets=connected")
+
+
+@api.post("/transactions/bulk")
+async def bulk_import_transactions(payload: dict, user: dict = Depends(current_user)):
+    transactions = payload.get("transactions", [])
+    if not transactions:
+        raise HTTPException(status_code=400, detail="No transactions provided")
+    docs = []
+    for t in transactions:
+        docs.append({
+            "txn_id": f"txn_{uuid.uuid4().hex[:12]}",
+            "user_id": user["user_id"],
+            "date": str(t.get("date", "")),
+            "description": str(t.get("description", "")),
+            "type": str(t.get("type", "credit")).lower(),
+            "amount": float(t.get("amount", 0)),
+            "currency": str(t.get("currency", "USD")),
+            "category": str(t.get("category", "")),
+            "month": str(t.get("month", "")),
+            "department": str(t.get("department", "")),
+            "subcategory": str(t.get("subcategory", "")),
+            "ledger": str(t.get("ledger", "")),
+            "vendor": str(t.get("vendor", "")),
+            "tx_id": str(t.get("tx_id", "")),
+            "source": str(t.get("source", "import")),
+            "account_id": str(t.get("account_id", "")),
+            "reconciled": False,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+    if docs:
+        await db.transactions.insert_many(docs)
+    return {"ok": True, "imported": len(docs)}
+
+
+@api.post("/sheets/read-preview")
+async def sheets_read_preview(payload: dict, user: dict = Depends(current_user)):
+    rec = await db.google_sheets_tokens.find_one({"user_id": user["user_id"]}, {"_id": 0})
+    if not rec:
+        raise HTTPException(status_code=400, detail="Google Sheets not connected")
+    spreadsheet_id = payload.get("spreadsheet_id", "")
+    rng = payload.get("range", "A1:G100")
+    if not spreadsheet_id:
+        raise HTTPException(status_code=400, detail="spreadsheet_id required")
+    from googleapiclient.discovery import build
+    creds = _get_creds(rec)
+    service = build("sheets", "v4", credentials=creds, cache_discovery=False)
+    res = service.spreadsheets().values().get(spreadsheetId=spreadsheet_id, range=rng).execute()
+    values = res.get("values", [])
+    return {"rows": values, "count": len(values)}
 
 
 def _get_creds(token_doc: dict):
@@ -770,6 +930,44 @@ async def sheets_export(payload: dict, user: dict = Depends(current_user)):
             for r in data["rows"]:
                 rows.append([r["code"], r["account"], r["type"], r["debit"], r["credit"]])
             rows.append(["TOTAL", "", "", data["total_debit"], data["total_credit"]])
+        elif kind == "cash-flow":
+            df_p = payload.get("date_from") or df
+            dt_p = payload.get("date_to") or dt
+            txns, accounts, _ = await _user_data(user["user_id"])
+            data = cash_flow(txns, accounts, df_p, dt_p)
+            rows.append(["Cash Flow Statement", "Period:", df_p, "to", dt_p, "Currency", data["currency"]])
+            rows.append([])
+            rows.append(["Activity", "Amount"])
+            rows.append(["Operating Activities", data["operating"]])
+            rows.append(["Investing Activities", data["investing"]])
+            rows.append(["Financing Activities", data["financing"]])
+            rows.append([])
+            rows.append(["Net Change in Cash", data["net_change"]])
+        elif kind == "general-ledger":
+            acct_id = payload.get("account_id", "")
+            df_p = payload.get("date_from") or df
+            dt_p = payload.get("date_to") or dt
+            txns, accounts, _ = await _user_data(user["user_id"])
+            data = general_ledger(txns, accounts, acct_id, df_p, dt_p)
+            if "error" in data:
+                raise HTTPException(status_code=400, detail=data["error"])
+            rows.append(["General Ledger", data["account"]["name"], "Period:", df_p, "to", dt_p])
+            rows.append(["Date", "Description", "Debit", "Credit", "Running Balance"])
+            for r in data.get("rows", []):
+                rows.append([r["date"], r["description"], r["debit"], r["credit"], r["balance"]])
+            rows.append(["", "Ending Balance", "", "", data.get("ending_balance", 0)])
+        elif kind == "tax-summary":
+            df_p = payload.get("date_from") or df
+            dt_p = payload.get("date_to") or dt
+            txns, accounts, invoices = await _user_data(user["user_id"])
+            data = tax_summary(txns, accounts, invoices, df_p, dt_p)
+            rows.append(["Tax Summary", "Period:", df_p, "to", dt_p, "Currency", data["currency"]])
+            rows.append([])
+            rows.append(["Metric", "Value"])
+            rows.append(["Taxable Sales", data["taxable_sales"]])
+            rows.append(["Tax Collected", data["tax_collected"]])
+            rows.append(["Paid Invoice Total", data["paid_invoice_total"]])
+            rows.append(["Invoice Count", data["invoices_count"]])
 
     spreadsheet = service.spreadsheets().create(body={"properties": {"title": title}}).execute()
     spreadsheet_id = spreadsheet["spreadsheetId"]
@@ -840,12 +1038,8 @@ app.include_router(api)
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
-    allow_origins=os.environ.get("CORS_ORIGINS", "*").split(","),
+    allow_origins=["http://localhost:3000"],  # Or ["*"] for development only
+    # allow_origins=os.environ.get("CORS_ORIGINS", "*").split(","),
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-@app.on_event("shutdown")
-async def shutdown_db_client():
-    client.close()

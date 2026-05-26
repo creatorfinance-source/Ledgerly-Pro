@@ -88,6 +88,12 @@ class Transaction(BaseModel):
     account_id: str  # primary account
     contra_account_id: Optional[str] = None
     category: str = ""
+    month: str = ""
+    department: str = ""
+    subcategory: str = ""
+    ledger: str = ""
+    vendor: str = ""
+    tx_id: str = ""
     source: str = "manual"  # manual | paypal | stripe | skrill | paysafe | google-sheets
     external_ref: Optional[str] = None
     reconciled: bool = False
@@ -103,6 +109,12 @@ class TransactionCreate(BaseModel):
     account_id: str
     contra_account_id: Optional[str] = None
     category: str = ""
+    month: str = ""
+    department: str = ""
+    subcategory: str = ""
+    ledger: str = ""
+    vendor: str = ""
+    tx_id: str = ""
     source: str = "manual"
     external_ref: Optional[str] = None
 
@@ -116,6 +128,12 @@ class TransactionUpdate(BaseModel):
     account_id: Optional[str] = None
     contra_account_id: Optional[str] = None
     category: Optional[str] = None
+    month: Optional[str] = None
+    department: Optional[str] = None
+    subcategory: Optional[str] = None
+    ledger: Optional[str] = None
+    vendor: Optional[str] = None
+    tx_id: Optional[str] = None
     reconciled: Optional[bool] = None
 
 

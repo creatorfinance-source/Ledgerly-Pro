@@ -19,8 +19,8 @@ export function AuthProvider({ children }) {
   }, []);
 
   useEffect(() => {
-    // Skip /auth/me if returning from Emergent OAuth (AuthCallback handles it)
-    if (window.location.hash?.includes("session_id=")) {
+    // Skip /auth/me if returning from Google OAuth (AuthCallback handles it)
+    if (window.location.hash?.includes("token=")) {
       setLoading(false);
       return;
     }

@@ -35,6 +35,7 @@ function AppRouter() {
       <Route path="/" element={<Landing />} />
       <Route path="/login" element={<Login />} />
       <Route path="/register" element={<Register />} />
+      <Route path="/auth-callback" element={<AuthCallback />} />
       <Route path="/dashboard" element={Inner(Dashboard)} />
       <Route path="/transactions" element={Inner(Transactions)} />
       <Route path="/accounts" element={Inner(Accounts)} />

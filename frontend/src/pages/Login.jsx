@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
+import { BACKEND_URL } from "@/lib/api";
 
 const SIDEBAR_IMG =
   "https://images.unsplash.com/photo-1686061592689-312bbfb5c055?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2ODh8MHwxfHNlYXJjaHw0fHxmaW5hbmNpYWwlMjBzcHJlYWRzaGVldCUyMGRhc2hib2FyZHxlbnwwfHx8fDE3NzgzNzY3NzN8MA&ixlib=rb-4.1.0&q=85";
@@ -30,9 +31,7 @@ export default function Login() {
   };
 
   const onGoogle = () => {
-    // REMINDER: DO NOT HARDCODE THE URL, OR ADD ANY FALLBACKS OR REDIRECT URLS, THIS BREAKS THE AUTH
-    const redirectUrl = window.location.origin + "/dashboard";
-    window.location.href = `https://auth.emergentagent.com/?redirect=${encodeURIComponent(redirectUrl)}`;
+    window.location.href = `${BACKEND_URL}/api/auth/google/login`;
   };
 
   return (

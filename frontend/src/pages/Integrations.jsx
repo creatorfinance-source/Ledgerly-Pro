@@ -6,8 +6,9 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Plug, RefreshCw, CheckCircle2, ExternalLink, Download } from "lucide-react";
+import { Plug, RefreshCw, CheckCircle2, ExternalLink, Download, Upload } from "lucide-react";
 import { toast } from "sonner";
+import ImportPreviewModal from "@/components/ImportPreviewModal";
 
 const PROVIDER_LOGOS = {
   paypal: "https://images.unsplash.com/photo-1641350625112-3b1d73c71418?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1MTN8MHwxfHNlYXJjaHwxfHxwYXlwYWwlMjBzdHJpcGUlMjBsb2dvfGVufDB8fHx8MTc3ODM3Njc3M3ww&ixlib=rb-4.1.0&q=85",
@@ -19,12 +20,17 @@ export default function Integrations() {
   const [sheetsStatus, setSheetsStatus] = useState({ configured: false, connected: false });
   const [accounts, setAccounts] = useState([]);
   const [importOpen, setImportOpen] = useState(false);
+  const [sheetsImportOpen, setSheetsImportOpen] = useState(false);
   const [importForm, setImportForm] = useState({ spreadsheet_id: "", range: "A1:G1000", account_id: "" });
 
   const load = async () => {
-    const [a, s, ac] = await Promise.all([api.get("/integrations"), api.get("/sheets/status"), api.get("/accounts")]);
-    setItems(a.data); setSheetsStatus(s.data); setAccounts(ac.data);
-    if (ac.data[0]) setImportForm((f) => ({ ...f, account_id: f.account_id || ac.data[0].account_id }));
+    try {
+      const [a, s, ac] = await Promise.all([api.get("/integrations"), api.get("/sheets/status"), api.get("/accounts")]);
+      setItems(a.data); setSheetsStatus(s.data); setAccounts(ac.data);
+      if (ac.data[0]) setImportForm((f) => ({ ...f, account_id: f.account_id || ac.data[0].account_id }));
+    } catch {
+      toast.error("Failed to load integrations");
+    }
   };
   useEffect(() => { load(); }, []);
 
@@ -72,8 +78,20 @@ export default function Integrations() {
     try {
       const { data } = await api.post("/sheets/import-transactions", importForm);
       toast.success(`Imported ${data.imported} transactions`);
-      setImportOpen(false);
+      setSheetsImportOpen(false);
     } catch (e) { toast.error(e?.response?.data?.detail || "Import failed"); }
+  };
+
+  const handleBulkImport = async (transactions) => {
+    // Modal handles chunked upload itself and passes empty array as "done" signal
+    if (!transactions || transactions.length === 0) { load(); return; }
+    try {
+      await api.post("/transactions/bulk", { transactions });
+      toast.success(`${transactions.length} transaction${transactions.length !== 1 ? "s" : ""} imported`);
+      load();
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Import failed");
+    }
   };
 
   const psps = items.filter((i) => i.category === "PSP");
@@ -147,7 +165,7 @@ export default function Integrations() {
               <div className="mt-4 flex items-center gap-2 flex-wrap">
                 {sheetsStatus.connected ? (
                   <>
-                    <Button size="sm" onClick={() => setImportOpen(true)} className="bg-moss hover:bg-[#3D5247] text-white" data-testid="sheets-import-btn"><Download className="w-3 h-3 mr-1" />Import transactions</Button>
+                    <Button size="sm" onClick={() => setSheetsImportOpen(true)} className="bg-moss hover:bg-[#3D5247] text-white" data-testid="sheets-import-btn"><Download className="w-3 h-3 mr-1" />Import transactions</Button>
                     <Button size="sm" variant="outline" onClick={() => window.open("/statements", "_self")}>Export from Statements</Button>
                   </>
                 ) : (
@@ -157,9 +175,41 @@ export default function Integrations() {
             </div>
           </div>
         </Card>
+
+        {/* File Import — always available regardless of Sheets connection */}
+        <Card className="surface-card p-6 mt-4" data-testid="file-import-card">
+          <div className="flex items-start gap-4">
+            <div className="w-12 h-12 rounded-md flex items-center justify-center text-white font-semibold" style={{ background: "#4A6741", fontFamily: "Outfit" }}>
+              <Upload className="w-5 h-5" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <h3 className="text-lg font-medium" style={{ fontFamily: "Outfit" }}>File Import</h3>
+              <div className="text-xs text-[#5C5C5C] mt-1">Import transactions from a local Excel (.xlsx, .xls) or CSV file. Drag-and-drop supported with column mapping preview.</div>
+              <div className="mt-4 flex items-center gap-2 flex-wrap">
+                <Button
+                  size="sm"
+                  className="bg-moss hover:bg-[#3D5247] text-white"
+                  onClick={() => setImportOpen(true)}
+                  data-testid="file-import-btn"
+                >
+                  <Upload className="w-3 h-3 mr-1" />Import File
+                </Button>
+              </div>
+            </div>
+          </div>
+        </Card>
       </div>
 
-      <Dialog open={importOpen} onOpenChange={setImportOpen}>
+      {/* File import modal */}
+      <ImportPreviewModal
+        open={importOpen}
+        onClose={() => setImportOpen(false)}
+        onImport={handleBulkImport}
+        accounts={accounts}
+      />
+
+      {/* Classic Google Sheets import dialog */}
+      <Dialog open={sheetsImportOpen} onOpenChange={setSheetsImportOpen}>
         <DialogContent>
           <DialogHeader><DialogTitle style={{ fontFamily: "Outfit" }}>Import transactions from Sheet</DialogTitle></DialogHeader>
           <div className="space-y-3">
@@ -174,7 +224,7 @@ export default function Integrations() {
             <div className="text-xs text-[#5C5C5C]">Expected columns: Date, Description, Type (debit/credit), Amount, Currency, Category, Source.</div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setImportOpen(false)}>Cancel</Button>
+            <Button variant="outline" onClick={() => setSheetsImportOpen(false)}>Cancel</Button>
             <Button className="bg-moss hover:bg-[#3D5247] text-white" onClick={importFromSheet} data-testid="sheets-import-submit">Import</Button>
           </DialogFooter>
         </DialogContent>

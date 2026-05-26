@@ -110,7 +110,7 @@ export default function AppLayout({ children }) {
 
       {/* Main */}
       <main className="flex-1 min-w-0 flex flex-col">
-        <header className="h-14 border-b border-cream bg-[#F9F8F6]/80 backdrop-blur-xl sticky top-0 z-30 flex items-center px-8">
+        <header className="h-14 border-b border-cream bg-[#F9F8F6] sticky top-0 z-20 flex items-center px-8">
           <div className="flex items-center gap-2 text-sm text-[#5C5C5C]">
             <span>Workspace</span>
             <ChevronRight className="w-3.5 h-3.5" strokeWidth={1.5} />
