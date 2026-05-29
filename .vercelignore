@@ -1,0 +1,23 @@
+# Exclude from Vercel deployment bundle
+
+# Python dev/test scripts (not needed for production server)
+backend/seed_next_data.py
+backend/import_next_data.py
+backend/verify_import.py
+backend/verify_seed.py
+backend/__pycache__/
+backend/data/
+
+# Frontend source (build output is deployed, not source)
+frontend/node_modules/
+frontend/src/
+frontend/public/
+frontend/.env
+
+# Documentation
+Instructions/
+README.md
+design_guidelines.json
+
+# Root dev files
+requirements.txt

@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+*.pyo
+.env
+.env.*
+*.log
+.DS_Store
+
+# Dev/seed scripts not needed in production container
+seed_next_data.py
+import_next_data.py
+verify_import.py
+verify_seed.py
+data/
+ca.pem

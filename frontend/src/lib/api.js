@@ -1,9 +1,12 @@
 import axios from "axios";
 
-// Use env var if set, otherwise derive from current host
-// This allows accessing from both localhost:3000 and 192.168.0.2:3000
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL ||
-  `http://${window.location.hostname}:5000`;
+// Use env var if set.
+// Empty string means same-origin (Vercel: frontend + API on same domain).
+// Fallback to port 5000 only in local dev when env var is absent.
+const BACKEND_URL =
+  process.env.REACT_APP_BACKEND_URL !== undefined
+    ? process.env.REACT_APP_BACKEND_URL
+    : `http://${window.location.hostname}:5000`;
 
 export { BACKEND_URL };
 export const API_BASE = `${BACKEND_URL}/api`;
