@@ -10,7 +10,7 @@ import bcrypt
 import jwt
 import requests
 from fastapi import HTTPException, Request, status
-from motor.motor_asyncio import AsyncIOMotorDatabase
+from typing import Any as AsyncIOMotorDatabase  # accepts both Motor and PG proxy
 
 JWT_SECRET = os.environ.get("JWT_SECRET", "dev-secret-change-me")
 JWT_ALG = os.environ.get("JWT_ALGORITHM", "HS256")

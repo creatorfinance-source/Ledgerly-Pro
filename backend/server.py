@@ -1,4 +1,4 @@
-# Ledgerly Finance & Accounts — Main FastAPI application.
+# Ledgerly Finance & Audit — Main FastAPI application.
 from __future__ import annotations
 
 import os
@@ -15,7 +15,7 @@ os.environ.setdefault("OAUTHLIB_INSECURE_TRANSPORT", "1")
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import RedirectResponse
-from motor.motor_asyncio import AsyncIOMotorClient
+from db import db, startup_db, shutdown_db
 from starlette.middleware.cors import CORSMiddleware
 
 from auth import (
@@ -35,6 +35,7 @@ from models import (
     Invoice,
     InvoiceCreate,
     InvoiceUpdate,
+    JournalEntryCreate,
     LoginPayload,
     Receipt,
     ReceiptCreate,
@@ -47,28 +48,27 @@ from models import (
     UserPublic,
 )
 from mock_psp import generate_mock_transactions
-from statements import balance_sheet, cash_flow, general_ledger, profit_and_loss, tax_summary, trial_balance
+from statements import (
+    balance_sheet,
+    cash_flow,
+    cost_center_pnl,
+    general_ledger,
+    profit_and_loss,
+    statement_of_equity,
+    tax_summary,
+    trial_balance,
+)
+from coa import CHART_OF_ACCOUNTS, COST_CENTERS
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
 
-mongo_url = os.environ["MONGO_URL"]
-mongo_tls_allow_invalid_certificates = os.getenv(
-    "MONGO_TLS_ALLOW_INVALID_CERTIFICATES", "false"
-).strip().lower() in {"1", "true", "yes", "on"}
-mongo_client_kwargs = {}
-if mongo_tls_allow_invalid_certificates:
-    mongo_client_kwargs["tlsAllowInvalidCertificates"] = True
-client = AsyncIOMotorClient(mongo_url, **mongo_client_kwargs)
-db = client[os.environ["DB_NAME"]]
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup logic can go here
+    await startup_db()   # creates connections + indexes/schema
     yield
-    # Shutdown logic
-    client.close()
+    await shutdown_db()  # closes pool / Motor client
 
 
 app = FastAPI(title="Ledgerly Finance API", lifespan=lifespan)
@@ -80,37 +80,39 @@ async def current_user(request: Request) -> dict:
     return await get_current_user(request, db)
 
 
-# Default chart of accounts seed
-DEFAULT_ACCOUNTS = [
-    {"name": "Cash", "code": "1000", "type": "asset"},
-    {"name": "Bank Account", "code": "1010", "type": "asset"},
-    {"name": "Accounts Receivable", "code": "1100", "type": "asset"},
-    {"name": "Inventory", "code": "1200", "type": "asset"},
-    {"name": "Equipment", "code": "1500", "type": "asset"},
-    {"name": "Accounts Payable", "code": "2000", "type": "liability"},
-    {"name": "Loans Payable", "code": "2100", "type": "liability"},
-    {"name": "Tax Payable", "code": "2200", "type": "liability"},
-    {"name": "Owner's Equity", "code": "3000", "type": "equity"},
-    {"name": "Sales", "code": "4000", "type": "income"},
-    {"name": "Service Revenue", "code": "4100", "type": "income"},
-    {"name": "Subscriptions", "code": "4200", "type": "income"},
-    {"name": "Donations", "code": "4300", "type": "income"},
-    {"name": "Salaries", "code": "5000", "type": "expense"},
-    {"name": "Rent", "code": "5100", "type": "expense"},
-    {"name": "Utilities", "code": "5200", "type": "expense"},
-    {"name": "Bank Fees", "code": "5300", "type": "expense"},
-    {"name": "Marketing", "code": "5400", "type": "expense"},
-    {"name": "Refunds", "code": "5500", "type": "expense"},
-    {"name": "Bank Transfer", "code": "5900", "type": "expense"},
-]
+# Default chart of accounts seed — NEXT Ventures Ltd. prop/CFD firm chart
+# (assets, liabilities, equity + categorised income/expense ledgers). Sourced
+# from coa.py so the seed script and statements stay in sync.
+DEFAULT_ACCOUNTS = CHART_OF_ACCOUNTS
+
+
+async def ensure_seed_cost_centers(user_id: str):
+    """Seed the CC01–CC11 / CORP cost centres for a user (idempotent)."""
+    try:
+        existing = await db.cost_centers.count_documents({"user_id": user_id})
+    except Exception:
+        return  # cost_centers collection/table not available — skip silently
+    if existing > 0:
+        return
+    docs = [{
+        "cc_code": cc["cc_code"],
+        "user_id": user_id,
+        "name": cc["name"],
+        "type": cc["type"],
+        "allocation_method": cc["allocation_method"],
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    } for cc in COST_CENTERS]
+    if docs:
+        await db.cost_centers.insert_many(docs)
 
 
 async def ensure_seed_accounts(user_id: str):
+    await ensure_seed_cost_centers(user_id)
     existing = await db.accounts.count_documents({"user_id": user_id})
     if existing > 0:
         return
     docs = []
-    for i, a in enumerate(DEFAULT_ACCOUNTS):
+    for a in DEFAULT_ACCOUNTS:
         docs.append({
             "account_id": f"acc_{uuid.uuid4().hex[:12]}",
             "user_id": user_id,
@@ -119,6 +121,9 @@ async def ensure_seed_accounts(user_id: str):
             "type": a["type"],
             "currency": "USD",
             "description": "",
+            "category": a.get("category", ""),
+            "subcategory": a.get("subcategory", ""),
+            "cost_center": a.get("cost_center", ""),
             "is_default": True,
             "created_at": datetime.now(timezone.utc).isoformat(),
         })
@@ -398,6 +403,133 @@ async def delete_transaction(txn_id: str, user: dict = Depends(current_user)):
 
 
 # ============================================================
+# JOURNAL ENTRIES  (balanced multi-line postings)
+# ============================================================
+
+@api.get("/journal-entries")
+async def list_journal_entries(
+    user: dict = Depends(current_user),
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    cost_center: Optional[str] = None,
+    limit: int = 2000,
+):
+    """Group transaction postings into balanced journal entries.
+
+    Postings sharing a ``journal_id`` form one entry; postings without one are
+    returned as single-line entries keyed by their txn_id.
+    """
+    q = {"user_id": user["user_id"]}
+    if date_from or date_to:
+        q["date"] = {}
+        if date_from:
+            q["date"]["$gte"] = date_from
+        if date_to:
+            q["date"]["$lte"] = date_to
+    rows = await db.transactions.find(q, {"_id": 0}).sort("date", -1).to_list(limit)
+    accounts = await db.accounts.find({"user_id": user["user_id"]}, {"_id": 0}).to_list(2000)
+    acc_by_id = {a["account_id"]: a for a in accounts}
+
+    groups: dict = {}
+    order: List[str] = []
+    for t in rows:
+        jid = t.get("journal_id") or t.get("txn_id")
+        if jid not in groups:
+            groups[jid] = []
+            order.append(jid)
+        groups[jid].append(t)
+
+    entries = []
+    for jid in order:
+        lines = groups[jid]
+        cc = next((l.get("department", "") for l in lines if l.get("department")), "")
+        if cost_center and cc != cost_center:
+            continue
+        first = lines[0]
+        out_lines = []
+        td = tc = 0.0
+        for l in lines:
+            acc = acc_by_id.get(l.get("account_id"), {})
+            amt = float(l.get("amount", 0) or 0)
+            debit = amt if l.get("type") == "debit" else 0.0
+            credit = amt if l.get("type") == "credit" else 0.0
+            td += debit
+            tc += credit
+            out_lines.append({
+                "txn_id": l.get("txn_id"),
+                "account_id": l.get("account_id"),
+                "account_code": acc.get("code", ""),
+                "account_name": acc.get("name", l.get("description", "")),
+                "debit": round(debit, 2),
+                "credit": round(credit, 2),
+                "description": l.get("description", ""),
+            })
+        entries.append({
+            "journal_id": jid,
+            "date": first.get("date", ""),
+            "description": first.get("description", ""),
+            "reference": first.get("tx_id", ""),
+            "cost_center": cc,
+            "currency": first.get("currency", "USD"),
+            "source": first.get("source", "manual"),
+            "lines": out_lines,
+            "total_debit": round(td, 2),
+            "total_credit": round(tc, 2),
+            "balanced": abs(td - tc) < 0.005,
+        })
+    return entries
+
+
+@api.post("/journal-entries")
+async def create_journal_entry(payload: JournalEntryCreate, user: dict = Depends(current_user)):
+    total_debit = round(sum(l.amount for l in payload.lines if l.type == "debit"), 2)
+    total_credit = round(sum(l.amount for l in payload.lines if l.type == "credit"), 2)
+    if abs(total_debit - total_credit) >= 0.005:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Entry is not balanced: debits {total_debit} ≠ credits {total_credit}",
+        )
+    journal_id = f"je_{uuid.uuid4().hex[:12]}"
+    docs = []
+    for l in payload.lines:
+        txn = Transaction(
+            user_id=user["user_id"],
+            date=payload.date,
+            description=l.description or payload.description,
+            amount=l.amount,
+            currency=payload.currency,
+            type=l.type,
+            account_id=l.account_id,
+            department=payload.cost_center,
+            tx_id=payload.reference,
+            month=payload.month,
+            journal_id=journal_id,
+            source="journal",
+            reconciled=True,
+        )
+        docs.append(txn.model_dump())
+    await db.transactions.insert_many(docs)
+    for d in docs:
+        d.pop("_id", None)
+    return {
+        "journal_id": journal_id,
+        "date": payload.date,
+        "description": payload.description,
+        "cost_center": payload.cost_center,
+        "total_debit": total_debit,
+        "total_credit": total_credit,
+        "balanced": True,
+        "lines": docs,
+    }
+
+
+@api.delete("/journal-entries/{journal_id}")
+async def delete_journal_entry(journal_id: str, user: dict = Depends(current_user)):
+    await db.transactions.delete_many({"user_id": user["user_id"], "journal_id": journal_id})
+    return {"ok": True}
+
+
+# ============================================================
 # INVOICES
 # ============================================================
 
@@ -511,9 +643,11 @@ async def delete_receipt(receipt_id: str, user: dict = Depends(current_user)):
 # ============================================================
 
 async def _user_data(user_id: str):
-    txns = await db.transactions.find({"user_id": user_id}, {"_id": 0}).to_list(5000)
-    accounts = await db.accounts.find({"user_id": user_id}, {"_id": 0}).to_list(1000)
-    invoices = await db.invoices.find({"user_id": user_id}, {"_id": 0}).to_list(2000)
+    # High limits: imported real data can run to tens of thousands of postings,
+    # and statements must aggregate ALL of them to be correct.
+    txns = await db.transactions.find({"user_id": user_id}, {"_id": 0}).to_list(1_000_000)
+    accounts = await db.accounts.find({"user_id": user_id}, {"_id": 0}).to_list(5000)
+    invoices = await db.invoices.find({"user_id": user_id}, {"_id": 0}).to_list(20000)
     return txns, accounts, invoices
 
 
@@ -564,6 +698,43 @@ async def stmt_tax(date_from: Optional[str] = None, date_to: Optional[str] = Non
     df, dt = _default_range(date_from, date_to)
     txns, accounts, invoices = await _user_data(user["user_id"])
     return tax_summary(txns, accounts, invoices, df, dt, base)
+
+
+@api.get("/statements/equity")
+async def stmt_equity(date_from: Optional[str] = None, date_to: Optional[str] = None, base: str = "USD", user: dict = Depends(current_user)):
+    df, dt = _default_range(date_from, date_to)
+    txns, accounts, _ = await _user_data(user["user_id"])
+    return statement_of_equity(txns, accounts, df, dt, base)
+
+
+# ============================================================
+# COST CENTERS
+# ============================================================
+
+@api.get("/cost-centers")
+async def list_cost_centers(user: dict = Depends(current_user)):
+    await ensure_seed_cost_centers(user["user_id"])
+    rows = await db.cost_centers.find({"user_id": user["user_id"]}, {"_id": 0}).to_list(100)
+    rows.sort(key=lambda r: r.get("cc_code", ""))
+    return rows
+
+
+@api.get("/statements/cost-center-pnl")
+async def stmt_cost_center_pnl(date_from: Optional[str] = None, date_to: Optional[str] = None, base: str = "USD", user: dict = Depends(current_user)):
+    df, dt = _default_range(date_from, date_to)
+    txns, accounts, _ = await _user_data(user["user_id"])
+    await ensure_seed_cost_centers(user["user_id"])
+    ccs = await db.cost_centers.find({"user_id": user["user_id"]}, {"_id": 0}).to_list(100)
+    cc_names = {c["cc_code"]: c.get("name", "") for c in ccs}
+    return cost_center_pnl(txns, accounts, df, dt, base, cc_names)
+
+
+@api.get("/cost-centers/used")
+async def cost_centers_used(user: dict = Depends(current_user)):
+    """Distinct cost-centre / department values actually present on transactions."""
+    txns = await db.transactions.find({"user_id": user["user_id"]}, {"_id": 0, "department": 1}).to_list(1_000_000)
+    seen = sorted({(t.get("department") or "").strip() for t in txns if (t.get("department") or "").strip()})
+    return seen
 
 
 # ============================================================
@@ -968,6 +1139,51 @@ async def sheets_export(payload: dict, user: dict = Depends(current_user)):
             rows.append(["Tax Collected", data["tax_collected"]])
             rows.append(["Paid Invoice Total", data["paid_invoice_total"]])
             rows.append(["Invoice Count", data["invoices_count"]])
+        elif kind == "cost-center-pnl":
+            df_p = payload.get("date_from") or df
+            dt_p = payload.get("date_to") or dt
+            ccs = await db.cost_centers.find({"user_id": user["user_id"]}, {"_id": 0}).to_list(100)
+            cc_names = {c["cc_code"]: c.get("name", "") for c in ccs}
+            data = cost_center_pnl(txns, accounts, df_p, dt_p, cc_names=cc_names)
+            rows.append(["Cost-Center P&L", "Period:", df_p, "to", dt_p, "Currency", data["currency"]])
+            rows.append([])
+            rows.append(["Cost Center", "Name", "Revenue", "Expenses", "Contribution", "Margin %"])
+            for r in data["rows"]:
+                rows.append([r["cost_center"], r["name"], r["revenue"], r["expenses"], r["contribution"], r["margin_pct"]])
+            rows.append(["TOTAL", "", data["total_revenue"], data["total_expenses"], data["total_contribution"], ""])
+        elif kind == "journal":
+            df_p = payload.get("date_from") or df
+            dt_p = payload.get("date_to") or dt
+            jtxns = await db.transactions.find(
+                {"user_id": user["user_id"], "date": {"$gte": df_p, "$lte": dt_p}}, {"_id": 0}
+            ).sort("date", -1).to_list(100000)
+            acc_by_id = {a["account_id"]: a for a in accounts}
+            rows.append(["Journal Entries", "Period:", df_p, "to", dt_p])
+            rows.append(["Date", "Journal ID", "Cost Center", "Account Code", "Account", "Debit", "Credit", "Description"])
+            for t in jtxns:
+                acc = acc_by_id.get(t.get("account_id"), {})
+                amt = float(t.get("amount", 0) or 0)
+                rows.append([
+                    t.get("date", ""), t.get("journal_id", "") or t.get("txn_id", ""),
+                    t.get("department", ""), acc.get("code", ""), acc.get("name", ""),
+                    amt if t.get("type") == "debit" else 0,
+                    amt if t.get("type") == "credit" else 0,
+                    t.get("description", ""),
+                ])
+        elif kind == "equity":
+            df_p = payload.get("date_from") or df
+            dt_p = payload.get("date_to") or dt
+            data = statement_of_equity(txns, accounts, df_p, dt_p)
+            rows.append(["Statement of Changes in Equity", "Period:", df_p, "to", dt_p, "Currency", data["currency"]])
+            rows.append([])
+            rows.append(["Item", "Amount"])
+            rows.append(["Beginning Equity", data["beginning_equity"]])
+            rows.append(["Beginning Retained Earnings", data["beginning_retained_earnings"]])
+            rows.append(["Capital Contributions", data["contributions"]])
+            rows.append(["Net Income for Period", data["net_income"]])
+            rows.append(["Dividends / Distributions", data["dividends"]])
+            rows.append(["Ending Retained Earnings", data["ending_retained_earnings"]])
+            rows.append(["Ending Equity", data["ending_equity"]])
 
     spreadsheet = service.spreadsheets().create(body={"properties": {"title": title}}).execute()
     spreadsheet_id = spreadsheet["spreadsheetId"]
@@ -1038,8 +1254,7 @@ app.include_router(api)
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
-    allow_origins=["http://localhost:3000"],  # Or ["*"] for development only
-    # allow_origins=os.environ.get("CORS_ORIGINS", "*").split(","),
+    allow_origins=os.environ.get("CORS_ORIGINS", "*").split(","),
     allow_methods=["*"],
     allow_headers=["*"],
 )

@@ -56,6 +56,9 @@ class Account(BaseModel):
     type: Literal["asset", "liability", "equity", "income", "expense"]
     currency: str = "USD"
     description: str = ""
+    category: str = ""       # P&L / balance-sheet grouping (e.g. "Operating Expenses (OPEX)")
+    subcategory: str = ""    # ledger grouping within a category
+    cost_center: str = ""    # CC01–CC11 / CORP
     is_default: bool = False
     created_at: str = Field(default_factory=_now_iso)
 
@@ -66,6 +69,9 @@ class AccountCreate(BaseModel):
     type: Literal["asset", "liability", "equity", "income", "expense"]
     currency: str = "USD"
     description: str = ""
+    category: str = ""
+    subcategory: str = ""
+    cost_center: str = ""
 
 
 class AccountUpdate(BaseModel):
@@ -74,6 +80,19 @@ class AccountUpdate(BaseModel):
     type: Optional[Literal["asset", "liability", "equity", "income", "expense"]] = None
     currency: Optional[str] = None
     description: Optional[str] = None
+    category: Optional[str] = None
+    subcategory: Optional[str] = None
+    cost_center: Optional[str] = None
+
+
+class CostCenter(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    cc_code: str                       # CC01–CC11 / CORP
+    user_id: str
+    name: str
+    type: Literal["Revenue", "Support"] = "Support"
+    allocation_method: str = ""
+    created_at: str = Field(default_factory=_now_iso)
 
 
 class Transaction(BaseModel):
@@ -94,6 +113,7 @@ class Transaction(BaseModel):
     ledger: str = ""
     vendor: str = ""
     tx_id: str = ""
+    journal_id: str = ""  # groups postings belonging to the same journal entry
     source: str = "manual"  # manual | paypal | stripe | skrill | paysafe | google-sheets
     external_ref: Optional[str] = None
     reconciled: bool = False
@@ -115,8 +135,26 @@ class TransactionCreate(BaseModel):
     ledger: str = ""
     vendor: str = ""
     tx_id: str = ""
+    journal_id: str = ""
     source: str = "manual"
     external_ref: Optional[str] = None
+
+
+class JournalLine(BaseModel):
+    account_id: str
+    type: Literal["debit", "credit"]
+    amount: float = Field(gt=0)
+    description: str = ""
+
+
+class JournalEntryCreate(BaseModel):
+    date: str
+    description: str = ""
+    reference: str = ""          # stored as tx_id on each line
+    cost_center: str = ""        # stored as department on each line
+    currency: str = "USD"
+    month: str = ""
+    lines: List[JournalLine] = Field(min_length=2)
 
 
 class TransactionUpdate(BaseModel):

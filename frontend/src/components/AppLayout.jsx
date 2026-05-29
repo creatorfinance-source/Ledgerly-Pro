@@ -5,6 +5,8 @@ import {
   Receipt,
   FileText,
   BookOpen,
+  BookText,
+  PieChart,
   Layers,
   Plug,
   Settings as SettingsIcon,
@@ -17,7 +19,9 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 const NAV = [
   { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { to: "/transactions", label: "Transactions", icon: Receipt },
+  { to: "/journal", label: "Journal Entries", icon: BookText },
   { to: "/accounts", label: "Chart of Accounts", icon: Layers },
+  { to: "/cost-centers", label: "Cost-Center P&L", icon: PieChart },
   { to: "/invoices", label: "Invoices", icon: FileText },
   { to: "/receipts", label: "Receipts", icon: FileText },
   { to: "/statements", label: "Statements", icon: BookOpen },

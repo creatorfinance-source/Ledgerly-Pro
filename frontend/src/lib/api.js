@@ -1,6 +1,11 @@
 import axios from "axios";
 
-export const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
+// Use env var if set, otherwise derive from current host
+// This allows accessing from both localhost:3000 and 192.168.0.2:3000
+const BACKEND_URL = process.env.REACT_APP_BACKEND_URL ||
+  `http://${window.location.hostname}:5000`;
+
+export { BACKEND_URL };
 export const API_BASE = `${BACKEND_URL}/api`;
 
 const api = axios.create({

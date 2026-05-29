@@ -10,6 +10,8 @@ import Register from "@/pages/Register";
 import AuthCallback from "@/pages/AuthCallback";
 import Dashboard from "@/pages/Dashboard";
 import Transactions from "@/pages/Transactions";
+import JournalEntries from "@/pages/JournalEntries";
+import CostCenters from "@/pages/CostCenters";
 import Accounts from "@/pages/Accounts";
 import Invoices from "@/pages/Invoices";
 import Receipts from "@/pages/Receipts";
@@ -38,6 +40,8 @@ function AppRouter() {
       <Route path="/auth-callback" element={<AuthCallback />} />
       <Route path="/dashboard" element={Inner(Dashboard)} />
       <Route path="/transactions" element={Inner(Transactions)} />
+      <Route path="/journal" element={Inner(JournalEntries)} />
+      <Route path="/cost-centers" element={Inner(CostCenters)} />
       <Route path="/accounts" element={Inner(Accounts)} />
       <Route path="/invoices" element={Inner(Invoices)} />
       <Route path="/receipts" element={Inner(Receipts)} />
