@@ -158,7 +158,7 @@ function ExportPreviewDialog({ open, onClose, tab, data, base, from, to, account
   if (!data) return null;
   const cur = data.currency || base;
   const tabLabel = TAB_LABELS[tab] || tab;
-  const nowStr = new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
+  // const nowStr = new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
 
   const accountName = tab === "general-ledger"
     ? (accounts.find((a) => a.account_id === accountId)?.name || data.account?.name || "")
@@ -199,7 +199,7 @@ function ExportPreviewDialog({ open, onClose, tab, data, base, from, to, account
                 <div className="text-sm font-semibold text-[#1A1A1A]" style={{ fontFamily: "Outfit" }}>
                   FP&amp;A Analytics — NEXT
                 </div>
-                <div className="text-[10px] text-[#5C5C5C] uppercase tracking-widest">Finance &amp; Accounts</div>
+                <div className="text-[10px] text-[#5C5C5C] uppercase tracking-widest">Finance &amp; Audits</div>
               </div>
             </div>
             <div className="text-right">
