@@ -8,10 +8,8 @@ backend/verify_seed.py
 backend/__pycache__/
 backend/data/
 
-# Frontend source (build output is deployed, not source)
+# Frontend dependencies (Vercel installs these itself)
 frontend/node_modules/
-frontend/src/
-frontend/public/
 frontend/.env
 
 # Documentation
