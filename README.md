@@ -4,6 +4,10 @@
 
 ---
 
+## ⚠️ Security Notice
+
+**All exposed credentials have been rotated.** See [`SECURITY.md`](./SECURITY.md) for details and setup instructions.
+
 ## 📖 Table of Contents
 1. [✨ Overview & Features](#-overview--features)
 2. [🚀 Getting Started (Running Locally)](#-getting-started-running-locally)
@@ -63,9 +67,13 @@ npm install --prefix client/frontend
 ```
 
 ### Step 3: Set Up Environment Variables
-1.  Create a `.env` file in the root directory of your **backend** folder (`client/backend/.env`).
+1.  Copy the example environment file:
+    ```bash
+    cp backend/.env.example backend/.env
+    ```
 2.  Fill in your necessary keys, such as database credentials, API keys, and JWT secrets.
     *(See the [Configuration](#-configuration) section for required variables.)*
+3.  **⚠️ NEVER commit `.env` files** — they are already in `.gitignore`
 
 ### Step 4: Run the Application
 You must run the backend server first, then the frontend client.
@@ -112,7 +120,7 @@ This section is for developers who plan to add features, fix bugs, or refactor t
 
 Before running the application, you must configure your environment variables.
 
-### Required Backend Variables (`.env` in `client/backend/`)
+### Required Backend Variables (`.env` in `backend/`)
 | Variable | Description | Example |
 | :--- | :--- | :--- |
 | `DATABASE_URL` | Connection string for the main database. | `postgresql://user:pass@host:5432/fn_db` |
@@ -138,6 +146,15 @@ valuable.
 2.  Create a new feature branch (`git checkout -b feature/AmazingFeature`).
 3.  Commit your changes and push to the branch.
 4.  Open a **Pull Request** and notify the maintainers!
+
+***
+
+## ⚠️ Security
+
+- ❌ **Never commit `.env` files** — they are in `.gitignore`
+- ✅ **Always use `.env.example`** as reference
+- ✅ **Rotate credentials** if exposed
+- See [`SECURITY.md`](./SECURITY.md) for detailed security guidelines
 
 ***
 **[Ledgerly Pro](https://ledgerly.nextlab.info)** | Developed by *Zubair Ahmad* | Licensed under MIT
