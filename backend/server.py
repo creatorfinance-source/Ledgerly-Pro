@@ -226,7 +226,7 @@ async def auth_google_callback(request: Request, code: Optional[str] = None, sta
     
     # Redirect to frontend with token
     # We use hash fragment so the token doesn't stay in browser history as much as query params
-    frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:3000")
+    frontend_url = os.environ.get("FRONTEND_URL", "https://fpna.nextlab.info")
     return RedirectResponse(url=f"{frontend_url}/auth-callback#token={token}")
 
 
@@ -981,7 +981,7 @@ async def sheets_callback(request: Request, code: Optional[str] = None, state: O
         }},
         upsert=True,
     )
-    frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:3000")
+    frontend_url = os.environ.get("FRONTEND_URL", "https://fpna.nextlab.info")
     return RedirectResponse(url=f"{frontend_url}/integrations?sheets=connected")
 
 
