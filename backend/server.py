@@ -48,6 +48,7 @@ from models import (
     UserPublic,
 )
 from mock_psp import generate_mock_transactions
+import coa
 from statements import (
     balance_sheet,
     cash_flow,
@@ -1252,100 +1253,89 @@ async def sheets_import(payload: dict, user: dict = Depends(current_user)):
 
 @api.post("/demo/seed")
 async def seed_demo_data(user: dict = Depends(current_user)):
-    """Populate the account with 6 months of realistic FP&A demo transactions."""
+    """Seed NEXT Ventures Ltd. Jan–May 2026 P&L data (FundedNext / FNmarkets)."""
     uid = user["user_id"]
 
-    # Only seed if the user has no transactions yet
-    existing = await db.transactions.count_documents({"user_id": uid})
+    existing = await db.transactions.count_documents({"user_id": uid, "source": "seed-next"})
     if existing > 0:
-        return {"ok": True, "skipped": True, "message": "Account already has data"}
+        return {"ok": True, "skipped": True, "message": "NEXT Ventures data already seeded"}
 
+    # Ensure chart of accounts + cost centres exist
     await ensure_seed_accounts(uid)
 
-    # Resolve key account IDs
-    async def _acct(name: str) -> str:
-        a = await db.accounts.find_one({"user_id": uid, "name": name}, {"_id": 0})
-        return a["account_id"] if a else ""
+    # Build {account_code: account_id} map
+    all_accts = await db.accounts.find({"user_id": uid}, {"_id": 0}).to_list(2000)
+    code_to_id: dict = {a.get("code"): a["account_id"] for a in all_accts if a.get("code")}
 
-    bank        = await _acct("Bank Account")
-    revenue     = await _acct("Trading Revenue")
-    salaries    = await _acct("Salaries & Wages")
-    tech        = await _acct("Technology & Software")
-    marketing   = await _acct("Marketing & Advertising") or await _acct("Marketing")
-    office      = await _acct("Office & Admin") or await _acct("Administration")
-    equity      = await _acct("Retained Earnings") or await _acct("Equity")
+    # Insert any accounts that coa defines but aren't in the DB yet
+    existing_codes = set(code_to_id.keys())
+    new_docs = []
+    for a in coa.CHART_OF_ACCOUNTS:
+        if a["code"] not in existing_codes:
+            aid = f"acc_{uuid.uuid4().hex[:12]}"
+            new_docs.append({
+                "account_id": aid, "user_id": uid,
+                "name": a["name"], "code": a["code"], "type": a["type"],
+                "currency": "USD", "description": "",
+                "category": a.get("category", ""), "subcategory": a.get("subcategory", ""),
+                "cost_center": a.get("cost_center", ""),
+                "is_default": True, "created_at": datetime.now(timezone.utc).isoformat(),
+            })
+            code_to_id[a["code"]] = aid
+    if new_docs:
+        await db.accounts.insert_many(new_docs)
 
-    from datetime import date, timedelta
-    import random
-    today = date.today()
+    clearing_id = code_to_id.get(coa.CLEARING_ACCOUNT_CODE, "")
 
-    def _iso(d: date) -> str:
-        return d.isoformat()
+    # Build (category, subcategory, ledger) → account meta lookup
+    acc_lookup = {
+        (a["category"], a["subcategory"], a["name"]): a
+        for a in coa.build_pnl_accounts()
+    }
 
-    def _txn(desc, amount, ttype, acct, contra, cat, dept, mo, src="manual", days_ago=0):
-        d = today - timedelta(days=days_ago)
-        return {
-            "txn_id":      f"txn_{uuid.uuid4().hex[:12]}",
-            "user_id":     uid,
-            "date":        _iso(d),
-            "description": desc,
-            "amount":      amount,
-            "currency":    "USD",
-            "type":        ttype,
-            "account_id":  acct,
-            "contra_account_id": contra,
-            "category":    cat,
-            "department":  dept,
-            "month":       d.strftime("%Y-%m"),
-            "source":      src,
-            "reconciled":  True,
-            "created_at":  datetime.now(timezone.utc).isoformat(),
-        }
+    def _legs(acc_type: str, amount: float):
+        positive = amount >= 0
+        primary = ("credit" if positive else "debit") if acc_type == "income" else ("debit" if positive else "credit")
+        return primary, ("debit" if primary == "credit" else "credit")
 
     txns = []
-    # ── 6 months of revenue ──────────────────────────────────
-    for mo_offset in range(6):
-        days = mo_offset * 30
-        base_rev = random.randint(85_000, 140_000)
-        txns.append(_txn(f"Trading Revenue – Net P&L", base_rev, "credit", revenue, bank,
-                         "Trading Revenue", "Trading Desk", "", "system", days + 28))
-        txns.append(_txn("Subscription & Platform Fees", random.randint(8_000, 12_000), "credit",
-                         revenue, bank, "Subscriptions", "Sales", "", "system", days + 25))
-        txns.append(_txn("Data Licensing Income", random.randint(3_000, 6_000), "credit",
-                         revenue, bank, "Licensing", "Research", "", "system", days + 20))
+    for category, subcategory, ledger, amounts in coa.PNL_ROWS:
+        meta = acc_lookup.get((category, subcategory, ledger))
+        if not meta:
+            continue
+        acc_id = code_to_id.get(meta["code"], "")
+        if not acc_id:
+            continue
+        acc_type = meta["type"]
+        cc = meta.get("cost_center", "")
+        for col, amount in zip(coa.PERIOD_COLUMNS, amounts):
+            if not amount:
+                continue
+            date_str = coa.PERIOD_END_DATE[col]
+            primary_side, clearing_side = _legs(acc_type, amount)
+            mag = round(abs(amount), 2)
+            journal_id = f"je_seed_{meta['code']}_{col}"
+            common = {
+                "user_id": uid, "date": date_str, "amount": mag,
+                "currency": "USD", "category": category,
+                "subcategory": subcategory, "ledger": ledger,
+                "month": col, "department": cc, "journal_id": journal_id,
+                "source": "seed-next", "reconciled": True,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+            base = f"txn_seed_{meta['code']}_{col}"
+            txns.append({**common, "txn_id": base, "type": primary_side,
+                         "account_id": acc_id, "contra_account_id": clearing_id,
+                         "description": f"{ledger} ({col})"})
+            txns.append({**common, "txn_id": f"{base}_clr", "type": clearing_side,
+                         "account_id": clearing_id, "contra_account_id": acc_id,
+                         "description": f"Cash settlement — {ledger} ({col})"})
 
-        # ── expenses ──────────────────────────────────────────
-        txns.append(_txn("Staff Payroll Run", random.randint(42_000, 52_000), "debit",
-                         salaries, bank, "Payroll", "Operations", "", "system", days + 27))
-        txns.append(_txn("AWS / Cloud Infrastructure", random.randint(4_200, 6_800), "debit",
-                         tech, bank, "Cloud Costs", "Engineering", "", "system", days + 15))
-        txns.append(_txn("Bloomberg Terminal Licence", 2_400, "debit",
-                         tech, bank, "Market Data", "Research", "", "system", days + 10))
-        txns.append(_txn("Digital Marketing Campaigns", random.randint(5_000, 9_000), "debit",
-                         marketing, bank, "Paid Media", "Marketing", "", "system", days + 12))
-        txns.append(_txn("Office Rent & Utilities", random.randint(6_500, 7_500), "debit",
-                         office, bank, "Rent", "Operations", "", "system", days + 5))
-        txns.append(_txn("Legal & Compliance Fees", random.randint(1_500, 3_500), "debit",
-                         office, bank, "Legal", "Compliance", "", "system", days + 18))
+    BATCH = 500
+    for i in range(0, len(txns), BATCH):
+        await db.transactions.insert_many(txns[i:i + BATCH])
 
-    await db.transactions.insert_many(txns)
-
-    # ── Journal entries: month-end accruals ───────────────────
-    for i in range(3):
-        days = i * 30 + 29
-        journal_id = f"je_{uuid.uuid4().hex[:12]}"
-        accrual_amount = random.randint(8_000, 15_000)
-        je_docs = [
-            {**_txn("Month-end Accrued Revenue", accrual_amount, "credit",
-                    revenue, "", "Accruals", "Finance", "", "journal", days),
-             "journal_id": journal_id},
-            {**_txn("Month-end Accrued Revenue (Dr)", accrual_amount, "debit",
-                    bank, "", "Accruals", "Finance", "", "journal", days),
-             "journal_id": journal_id},
-        ]
-        await db.transactions.insert_many(je_docs)
-
-    return {"ok": True, "inserted": len(txns) + 6, "message": "Demo data seeded"}
+    return {"ok": True, "inserted": len(txns), "message": f"NEXT Ventures Jan–May 2026 data seeded ({len(txns)} postings)"}
 
 
 # ============================================================
