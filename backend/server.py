@@ -1247,6 +1247,108 @@ async def sheets_import(payload: dict, user: dict = Depends(current_user)):
 
 
 # ============================================================
+# DEMO DATA SEED
+# ============================================================
+
+@api.post("/demo/seed")
+async def seed_demo_data(user: dict = Depends(current_user)):
+    """Populate the account with 6 months of realistic FP&A demo transactions."""
+    uid = user["user_id"]
+
+    # Only seed if the user has no transactions yet
+    existing = await db.transactions.count_documents({"user_id": uid})
+    if existing > 0:
+        return {"ok": True, "skipped": True, "message": "Account already has data"}
+
+    await ensure_seed_accounts(uid)
+
+    # Resolve key account IDs
+    async def _acct(name: str) -> str:
+        a = await db.accounts.find_one({"user_id": uid, "name": name}, {"_id": 0})
+        return a["account_id"] if a else ""
+
+    bank        = await _acct("Bank Account")
+    revenue     = await _acct("Trading Revenue")
+    salaries    = await _acct("Salaries & Wages")
+    tech        = await _acct("Technology & Software")
+    marketing   = await _acct("Marketing & Advertising") or await _acct("Marketing")
+    office      = await _acct("Office & Admin") or await _acct("Administration")
+    equity      = await _acct("Retained Earnings") or await _acct("Equity")
+
+    from datetime import date, timedelta
+    import random
+    today = date.today()
+
+    def _iso(d: date) -> str:
+        return d.isoformat()
+
+    def _txn(desc, amount, ttype, acct, contra, cat, dept, mo, src="manual", days_ago=0):
+        d = today - timedelta(days=days_ago)
+        return {
+            "txn_id":      f"txn_{uuid.uuid4().hex[:12]}",
+            "user_id":     uid,
+            "date":        _iso(d),
+            "description": desc,
+            "amount":      amount,
+            "currency":    "USD",
+            "type":        ttype,
+            "account_id":  acct,
+            "contra_account_id": contra,
+            "category":    cat,
+            "department":  dept,
+            "month":       d.strftime("%Y-%m"),
+            "source":      src,
+            "reconciled":  True,
+            "created_at":  datetime.now(timezone.utc).isoformat(),
+        }
+
+    txns = []
+    # ── 6 months of revenue ──────────────────────────────────
+    for mo_offset in range(6):
+        days = mo_offset * 30
+        base_rev = random.randint(85_000, 140_000)
+        txns.append(_txn(f"Trading Revenue – Net P&L", base_rev, "credit", revenue, bank,
+                         "Trading Revenue", "Trading Desk", "", "system", days + 28))
+        txns.append(_txn("Subscription & Platform Fees", random.randint(8_000, 12_000), "credit",
+                         revenue, bank, "Subscriptions", "Sales", "", "system", days + 25))
+        txns.append(_txn("Data Licensing Income", random.randint(3_000, 6_000), "credit",
+                         revenue, bank, "Licensing", "Research", "", "system", days + 20))
+
+        # ── expenses ──────────────────────────────────────────
+        txns.append(_txn("Staff Payroll Run", random.randint(42_000, 52_000), "debit",
+                         salaries, bank, "Payroll", "Operations", "", "system", days + 27))
+        txns.append(_txn("AWS / Cloud Infrastructure", random.randint(4_200, 6_800), "debit",
+                         tech, bank, "Cloud Costs", "Engineering", "", "system", days + 15))
+        txns.append(_txn("Bloomberg Terminal Licence", 2_400, "debit",
+                         tech, bank, "Market Data", "Research", "", "system", days + 10))
+        txns.append(_txn("Digital Marketing Campaigns", random.randint(5_000, 9_000), "debit",
+                         marketing, bank, "Paid Media", "Marketing", "", "system", days + 12))
+        txns.append(_txn("Office Rent & Utilities", random.randint(6_500, 7_500), "debit",
+                         office, bank, "Rent", "Operations", "", "system", days + 5))
+        txns.append(_txn("Legal & Compliance Fees", random.randint(1_500, 3_500), "debit",
+                         office, bank, "Legal", "Compliance", "", "system", days + 18))
+
+    await db.transactions.insert_many(txns)
+
+    # ── Journal entries: month-end accruals ───────────────────
+    for i in range(3):
+        days = i * 30 + 29
+        journal_id = f"je_{uuid.uuid4().hex[:12]}"
+        accrual_amount = random.randint(8_000, 15_000)
+        je_docs = [
+            {**_txn("Month-end Accrued Revenue", accrual_amount, "credit",
+                    revenue, "", "Accruals", "Finance", "", "journal", days),
+             "journal_id": journal_id},
+            {**_txn("Month-end Accrued Revenue (Dr)", accrual_amount, "debit",
+                    bank, "", "Accruals", "Finance", "", "journal", days),
+             "journal_id": journal_id},
+        ]
+        await db.transactions.insert_many(je_docs)
+
+    return {"ok": True, "inserted": len(txns) + 6, "message": "Demo data seeded"}
+
+
+# ============================================================
 # Wire up app
 # ============================================================
 app.include_router(api)

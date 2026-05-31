@@ -179,6 +179,11 @@ class _PgCollection:
                         clauses.append(f"{col} IN ({holders})")
                         params.extend(op_val)
                         idx += len(op_val)
+                    elif op == "$regex":
+                        # MongoDB $regex → PostgreSQL ILIKE (case-insensitive by default)
+                        clauses.append(f"{col} ILIKE ${idx}")
+                        params.append(f"%{op_val}%")
+                        idx += 1
             else:
                 clauses.append(f"{col} = ${idx}")
                 params.append(val)
