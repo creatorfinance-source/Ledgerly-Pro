@@ -30,6 +30,10 @@ class UserPublic(BaseModel):
     provider: str = "email"
     default_currency: str = "USD"
     organization: str = "My Company"
+    job_title: Optional[str] = ""
+    phone: Optional[str] = ""
+    timezone: Optional[str] = "UTC"
+    bio: Optional[str] = ""
 
 
 class RegisterPayload(BaseModel):
@@ -269,3 +273,7 @@ class SettingsUpdate(BaseModel):
     organization: Optional[str] = None
     default_currency: Optional[str] = None
     name: Optional[str] = None
+    job_title: Optional[str] = None
+    phone: Optional[str] = None
+    timezone: Optional[str] = None
+    bio: Optional[str] = None

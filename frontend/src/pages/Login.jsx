@@ -61,7 +61,10 @@ export default function Login() {
           <h1 className="text-3xl font-light tracking-tight" style={{ fontFamily: "Outfit" }}>
             Sign in to your books
           </h1>
-          <p className="text-sm text-[#5C5C5C] mt-2">Use Google or your email</p>
+          <p className="text-sm text-[#5C5C5C] mt-2">
+            Use your <span className="font-medium text-moss">@wearenext.io</span> or{" "}
+            <span className="font-medium text-moss">@nextventures.io</span> account
+          </p>
 
           <Button
             type="button"

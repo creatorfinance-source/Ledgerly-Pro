@@ -46,6 +46,9 @@ export default function Register() {
           Create your workspace
         </h1>
         <p className="text-sm text-[#5C5C5C] mt-2">Start with a clean ledger and a default chart of accounts.</p>
+        <div className="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-[#F2F0ED] border border-cream text-xs text-moss font-medium">
+          Access restricted to <strong>@wearenext.io</strong> and <strong>@nextventures.io</strong>
+        </div>
 
         <Button
           type="button"

@@ -64,6 +64,18 @@ from coa import CHART_OF_ACCOUNTS, COST_CENTERS
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
 
+# Only these email domains may register / log in.
+ALLOWED_EMAIL_DOMAINS = {"wearenext.io", "nextventures.io"}
+
+
+def _check_email_domain(email: str) -> None:
+    domain = email.rsplit("@", 1)[-1].lower()
+    if domain not in ALLOWED_EMAIL_DOMAINS:
+        raise HTTPException(
+            status_code=403,
+            detail="Access is restricted to @wearenext.io and @nextventures.io email addresses.",
+        )
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -215,6 +227,8 @@ async def auth_google_callback(request: Request, code: Optional[str] = None, sta
     if not email:
         raise HTTPException(status_code=400, detail="Could not get email from Google")
 
+    _check_email_domain(email)
+
     user = await upsert_user(
         db,
         email=email,
@@ -233,6 +247,7 @@ async def auth_google_callback(request: Request, code: Optional[str] = None, sta
 
 @api.post("/auth/register")
 async def auth_register(payload: RegisterPayload):
+    _check_email_domain(payload.email)
     existing = await db.users.find_one({"email": payload.email}, {"_id": 0})
     if existing and existing.get("password_hash"):
         raise HTTPException(status_code=400, detail="Email already registered")
@@ -365,17 +380,20 @@ async def list_transactions(
     source: Optional[str] = None,
     limit: int = 500,
 ):
-    q = {"user_id": user["user_id"]}
+    # Base: own transactions OR org-wide seed-next data visible to every user.
+    conditions: list = [{"$or": [{"user_id": user["user_id"]}, {"source": "seed-next"}]}]
     if account_id:
-        q["account_id"] = account_id
+        conditions.append({"account_id": account_id})
     if source:
-        q["source"] = source
+        conditions.append({"source": source})
     if date_from or date_to:
-        q["date"] = {}
+        date_q: dict = {}
         if date_from:
-            q["date"]["$gte"] = date_from
+            date_q["$gte"] = date_from
         if date_to:
-            q["date"]["$lte"] = date_to
+            date_q["$lte"] = date_to
+        conditions.append({"date": date_q})
+    q = {"$and": conditions} if len(conditions) > 1 else conditions[0]
     rows = await db.transactions.find(q, {"_id": 0}).sort("date", -1).to_list(limit)
     return rows
 
@@ -420,15 +438,18 @@ async def list_journal_entries(
     Postings sharing a ``journal_id`` form one entry; postings without one are
     returned as single-line entries keyed by their txn_id.
     """
-    q = {"user_id": user["user_id"]}
+    conditions: list = [{"$or": [{"user_id": user["user_id"]}, {"source": "seed-next"}]}]
     if date_from or date_to:
-        q["date"] = {}
+        date_q: dict = {}
         if date_from:
-            q["date"]["$gte"] = date_from
+            date_q["$gte"] = date_from
         if date_to:
-            q["date"]["$lte"] = date_to
+            date_q["$lte"] = date_to
+        conditions.append({"date": date_q})
+    q = {"$and": conditions} if len(conditions) > 1 else conditions[0]
     rows = await db.transactions.find(q, {"_id": 0}).sort("date", -1).to_list(limit)
-    accounts = await db.accounts.find({"user_id": user["user_id"]}, {"_id": 0}).to_list(2000)
+    txn_user_ids = list({t.get("user_id", user["user_id"]) for t in rows} | {user["user_id"]})
+    accounts = await db.accounts.find({"user_id": {"$in": txn_user_ids}}, {"_id": 0}).to_list(10000)
     acc_by_id = {a["account_id"]: a for a in accounts}
 
     groups: dict = {}
@@ -644,10 +665,15 @@ async def delete_receipt(receipt_id: str, user: dict = Depends(current_user)):
 # ============================================================
 
 async def _user_data(user_id: str):
-    # High limits: imported real data can run to tens of thousands of postings,
-    # and statements must aggregate ALL of them to be correct.
-    txns = await db.transactions.find({"user_id": user_id}, {"_id": 0}).to_list(1_000_000)
-    accounts = await db.accounts.find({"user_id": user_id}, {"_id": 0}).to_list(5000)
+    # Include the current user's own transactions + any org-wide seed-next data
+    # seeded by any admin user so that all authenticated users see the same dataset.
+    txn_query: dict = {"$or": [{"user_id": user_id}, {"source": "seed-next"}]}
+    txns = await db.transactions.find(txn_query, {"_id": 0}).to_list(1_000_000)
+
+    # Collect all user_ids present in the fetched transactions so we can load
+    # the correct accounts for every leg (seed owner may differ from current user).
+    txn_user_ids = list({t.get("user_id", user_id) for t in txns} | {user_id})
+    accounts = await db.accounts.find({"user_id": {"$in": txn_user_ids}}, {"_id": 0}).to_list(10000)
     invoices = await db.invoices.find({"user_id": user_id}, {"_id": 0}).to_list(20000)
     return txns, accounts, invoices
 
@@ -733,7 +759,8 @@ async def stmt_cost_center_pnl(date_from: Optional[str] = None, date_to: Optiona
 @api.get("/cost-centers/used")
 async def cost_centers_used(user: dict = Depends(current_user)):
     """Distinct cost-centre / department values actually present on transactions."""
-    txns = await db.transactions.find({"user_id": user["user_id"]}, {"_id": 0, "department": 1}).to_list(1_000_000)
+    q = {"$or": [{"user_id": user["user_id"]}, {"source": "seed-next"}]}
+    txns = await db.transactions.find(q, {"_id": 0, "department": 1}).to_list(1_000_000)
     seen = sorted({(t.get("department") or "").strip() for t in txns if (t.get("department") or "").strip()})
     return seen
 

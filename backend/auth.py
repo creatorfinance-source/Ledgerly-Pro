@@ -77,7 +77,11 @@ async def upsert_user(db: AsyncIOMotorDatabase, *, email: str, name: str, pictur
         "provider": provider,
         "password_hash": password_hash,
         "default_currency": "USD",
-        "organization": "My Company",
+        "organization": "NEXT Ventures",
+        "job_title": "",
+        "phone": "",
+        "timezone": "UTC",
+        "bio": "",
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.users.insert_one(doc)
