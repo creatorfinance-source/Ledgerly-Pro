@@ -31,6 +31,8 @@ from models import (
     Account,
     AccountCreate,
     AccountUpdate,
+    AutomationCreate,
+    AutomationUpdate,
     Integration,
     Invoice,
     InvoiceCreate,
@@ -40,6 +42,7 @@ from models import (
     Receipt,
     ReceiptCreate,
     RegisterPayload,
+    RoleAssign,
     SessionExchange,
     SettingsUpdate,
     Transaction,
@@ -90,7 +93,27 @@ api = APIRouter(prefix="/api")
 
 # ---------- Helper: dependency that injects current user ----------
 async def current_user(request: Request) -> dict:
-    return await get_current_user(request, db)
+    user = await get_current_user(request, db)
+    # Enforce super-admin role at request time so it's always current
+    if user.get("email") == SUPER_ADMIN_EMAIL and user.get("role") != "super_admin":
+        await db.users.update_one({"user_id": user["user_id"]}, {"$set": {"role": "super_admin"}})
+        user["role"] = "super_admin"
+    return user
+
+
+# ---------- RBAC helpers ----------
+SUPER_ADMIN_EMAIL = "zubair.ahmad@nextventures.io"
+ROLE_HIERARCHY = {"viewer": 1, "analyst": 2, "manager": 3, "admin": 4, "super_admin": 5}
+
+
+def require_role(min_role: str):
+    """FastAPI dependency that requires user.role >= min_role."""
+    async def _dep(user: dict = Depends(current_user)) -> dict:
+        level = ROLE_HIERARCHY.get(user.get("role", "viewer"), 1)
+        if level < ROLE_HIERARCHY[min_role]:
+            raise HTTPException(status_code=403, detail=f"Requires '{min_role}' role or higher.")
+        return user
+    return _dep
 
 
 # Default chart of accounts seed — NEXT Ventures Ltd. prop/CFD firm chart
@@ -258,6 +281,10 @@ async def auth_register(payload: RegisterPayload):
         provider="email",
         password_hash=hash_password(payload.password),
     )
+    # Enforce super_admin role for the designated super-admin email
+    if payload.email == SUPER_ADMIN_EMAIL:
+        await db.users.update_one({"user_id": user["user_id"]}, {"$set": {"role": "super_admin"}})
+        user["role"] = "super_admin"
     await ensure_seed_accounts(user["user_id"])
     token = create_jwt(user["user_id"])
     user.pop("password_hash", None)
@@ -271,6 +298,9 @@ async def auth_login(payload: LoginPayload):
         raise HTTPException(status_code=401, detail="Invalid credentials")
     if not verify_password(payload.password, user["password_hash"]):
         raise HTTPException(status_code=401, detail="Invalid credentials")
+    if payload.email == SUPER_ADMIN_EMAIL and user.get("role") != "super_admin":
+        await db.users.update_one({"user_id": user["user_id"]}, {"$set": {"role": "super_admin"}})
+        user["role"] = "super_admin"
     await ensure_seed_accounts(user["user_id"])
     token = create_jwt(user["user_id"])
     user.pop("password_hash", None)
@@ -1363,6 +1393,114 @@ async def seed_demo_data(user: dict = Depends(current_user)):
         await db.transactions.insert_many(txns[i:i + BATCH])
 
     return {"ok": True, "inserted": len(txns), "message": f"NEXT Ventures Jan–May 2026 data seeded ({len(txns)} postings)"}
+
+
+# ============================================================
+# ADMIN — user management (super_admin / admin only)
+# ============================================================
+
+@api.get("/admin/users")
+async def admin_list_users(user: dict = Depends(require_role("admin"))):
+    rows = await db.users.find({}, {"_id": 0, "password_hash": 0}).to_list(500)
+    return rows
+
+
+@api.patch("/admin/users/{target_user_id}/role")
+async def admin_set_role(target_user_id: str, payload: RoleAssign, user: dict = Depends(require_role("admin"))):
+    target = await db.users.find_one({"user_id": target_user_id}, {"_id": 0})
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    # Only super_admin can assign super_admin or admin roles
+    if payload.role in ("super_admin", "admin") and user.get("role") != "super_admin":
+        raise HTTPException(status_code=403, detail="Only super_admin can assign admin/super_admin roles.")
+    # Protect the super admin from demotion by anyone other than themselves
+    if target.get("email") == SUPER_ADMIN_EMAIL and user.get("email") != SUPER_ADMIN_EMAIL:
+        raise HTTPException(status_code=403, detail="Cannot change the super admin's role.")
+    await db.users.update_one(
+        {"user_id": target_user_id},
+        {"$set": {
+            "role": payload.role,
+            "role_assigned_by": user["user_id"],
+            "role_updated_at": datetime.now(timezone.utc).isoformat(),
+        }},
+    )
+    return {"ok": True, "user_id": target_user_id, "role": payload.role}
+
+
+@api.get("/admin/stats")
+async def admin_stats(user: dict = Depends(require_role("admin"))):
+    from collections import Counter
+    all_users = await db.users.find({}, {"_id": 0, "role": 1}).to_list(1000)
+    role_counts = dict(Counter(u.get("role", "viewer") for u in all_users))
+    total_txns = await db.transactions.count_documents({})
+    total_invoices = await db.invoices.count_documents({})
+    return {
+        "total_users": len(all_users),
+        "by_role": role_counts,
+        "total_transactions": total_txns,
+        "total_invoices": total_invoices,
+    }
+
+
+# ============================================================
+# AUTOMATIONS
+# ============================================================
+
+@api.get("/automations")
+async def list_automations(user: dict = Depends(require_role("analyst"))):
+    rows = await db.automations.find({"user_id": user["user_id"]}, {"_id": 0}).sort("created_at", -1).to_list(200)
+    return rows
+
+
+@api.post("/automations")
+async def create_automation(payload: AutomationCreate, user: dict = Depends(require_role("analyst"))):
+    doc = {
+        "automation_id": f"auto_{uuid.uuid4().hex[:12]}",
+        "user_id": user["user_id"],
+        "name": payload.name,
+        "description": payload.description,
+        "trigger_type": payload.trigger_type,
+        "trigger_config": payload.trigger_config,
+        "action_type": payload.action_type,
+        "action_config": payload.action_config,
+        "is_active": True,
+        "last_run_at": "",
+        "run_count": 0,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.automations.insert_one(doc)
+    return doc
+
+
+@api.patch("/automations/{automation_id}")
+async def update_automation(automation_id: str, payload: AutomationUpdate, user: dict = Depends(require_role("analyst"))):
+    rec = await db.automations.find_one({"automation_id": automation_id, "user_id": user["user_id"]}, {"_id": 0})
+    if not rec:
+        raise HTTPException(status_code=404, detail="Automation not found")
+    updates = {k: v for k, v in payload.model_dump().items() if v is not None}
+    updates["updated_at"] = datetime.now(timezone.utc).isoformat()
+    await db.automations.update_one({"automation_id": automation_id}, {"$set": updates})
+    return {**rec, **updates}
+
+
+@api.delete("/automations/{automation_id}")
+async def delete_automation(automation_id: str, user: dict = Depends(require_role("analyst"))):
+    await db.automations.delete_one({"automation_id": automation_id, "user_id": user["user_id"]})
+    return {"ok": True}
+
+
+@api.post("/automations/{automation_id}/run")
+async def run_automation(automation_id: str, user: dict = Depends(require_role("analyst"))):
+    rec = await db.automations.find_one({"automation_id": automation_id, "user_id": user["user_id"]}, {"_id": 0})
+    if not rec:
+        raise HTTPException(status_code=404, detail="Automation not found")
+    now = datetime.now(timezone.utc).isoformat()
+    await db.automations.update_one(
+        {"automation_id": automation_id},
+        {"$set": {"last_run_at": now, "run_count": rec.get("run_count", 0) + 1, "updated_at": now}},
+    )
+    return {"ok": True, "automation_id": automation_id, "ran_at": now}
 
 
 # ============================================================

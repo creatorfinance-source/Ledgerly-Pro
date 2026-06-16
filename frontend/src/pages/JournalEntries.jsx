@@ -85,7 +85,8 @@ export default function JournalEntries() {
     }
   };
 
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, [from, to, ccFilter]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { load(); }, [from, to, ccFilter]);
 
   // ── New-entry form helpers ──
   const setField = (k, v) => setForm((f) => ({ ...f, [k]: v }));

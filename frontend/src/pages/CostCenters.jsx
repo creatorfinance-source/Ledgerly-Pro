@@ -50,7 +50,8 @@ export default function CostCenters() {
     }
   };
 
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, [from, to, base]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { load(); }, [from, to, base]);
 
   const exportCSV = () => {
     if (!data) return;

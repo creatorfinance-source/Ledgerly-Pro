@@ -8,7 +8,7 @@ const isDevServer = process.env.NODE_ENV !== "production";
 
 // Environment variable overrides
 const config = {
-  enableHealthCheck: process.env.ENABLE_HEALTH_CHECK === "true",
+  enableHealthCheck: process.env.ENABLE_HEALTH_CHECK === "false",
 };
 
 // Conditionally load health check modules only if enabled

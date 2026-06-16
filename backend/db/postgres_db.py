@@ -161,34 +161,55 @@ class _PgCollection:
     # ── internal filter builder ──────────────────────────────────────────
 
     def _where(self, filt: Optional[dict]) -> Tuple[str, list]:
-        """Convert a MongoDB-style filter dict to a SQL WHERE clause + params."""
-        clauses: List[str] = []
+        """Convert a MongoDB-style filter dict to a SQL WHERE clause + params.
+
+        Handles $and/$or compound operators, comparison operators ($gte/$lte/etc.),
+        $in, and $regex in addition to simple equality filters.
+        """
         params: list = []
-        idx = 1
-        for col, val in (filt or {}).items():
-            if isinstance(val, dict):
-                _OP = {"$gte": ">=", "$lte": "<=", "$gt": ">", "$lt": "<", "$ne": "!="}
-                for op, op_val in val.items():
-                    pg_op = _OP.get(op)
-                    if pg_op:
-                        clauses.append(f"{col} {pg_op} ${idx}")
-                        params.append(op_val)
-                        idx += 1
-                    elif op == "$in" and isinstance(op_val, list):
-                        holders = ", ".join(f"${i}" for i in range(idx, idx + len(op_val)))
-                        clauses.append(f"{col} IN ({holders})")
-                        params.extend(op_val)
-                        idx += len(op_val)
-                    elif op == "$regex":
-                        # MongoDB $regex → PostgreSQL ILIKE (case-insensitive by default)
-                        clauses.append(f"{col} ILIKE ${idx}")
-                        params.append(f"%{op_val}%")
-                        idx += 1
-            else:
-                clauses.append(f"{col} = ${idx}")
-                params.append(val)
-                idx += 1
-        return " AND ".join(clauses), params
+        idx = [1]  # list so the nested closure can mutate it
+
+        _OP = {"$gte": ">=", "$lte": "<=", "$gt": ">", "$lt": "<", "$ne": "!="}
+
+        def _build(f: dict) -> str:
+            parts: List[str] = []
+            for col, val in (f or {}).items():
+                if col == "$and" and isinstance(val, list):
+                    inner = [_build(c) for c in val if c]
+                    if inner:
+                        parts.append("(" + " AND ".join(inner) + ")")
+                elif col == "$or" and isinstance(val, list):
+                    inner = [_build(c) for c in val if c]
+                    if inner:
+                        parts.append("(" + " OR ".join(inner) + ")")
+                elif isinstance(val, dict):
+                    for op, op_val in val.items():
+                        pg_op = _OP.get(op)
+                        if pg_op:
+                            parts.append(f"{col} {pg_op} ${idx[0]}")
+                            params.append(op_val)
+                            idx[0] += 1
+                        elif op == "$in" and isinstance(op_val, list):
+                            holders = ", ".join(
+                                f"${i}" for i in range(idx[0], idx[0] + len(op_val))
+                            )
+                            parts.append(f"{col} IN ({holders})")
+                            params.extend(op_val)
+                            idx[0] += len(op_val)
+                        elif op == "$regex":
+                            parts.append(f"{col} ILIKE ${idx[0]}")
+                            params.append(f"%{op_val}%")
+                            idx[0] += 1
+                else:
+                    parts.append(f"{col} = ${idx[0]}")
+                    params.append(val)
+                    idx[0] += 1
+            return " AND ".join(parts)
+
+        if not filt:
+            return "", []
+        sql = _build(filt)
+        return sql, params
 
     # ── public Motor-compatible API ──────────────────────────────────────
 
@@ -357,14 +378,35 @@ class PostgresDatabaseProxy:
 
     @classmethod
     async def create(cls) -> Tuple["PostgresDatabaseProxy", Callable]:
-        dsn = os.environ["POSTGRES_URL"]
-        pool = await asyncpg.create_pool(
-            dsn,
-            init=_init_conn,
-            min_size=int(os.getenv("PG_POOL_MIN", "3")),
-            max_size=int(os.getenv("PG_POOL_MAX", "20")),
-            command_timeout=30,
-        )
+        dsn = os.environ.get("POSTGRES_URL")
+        if not dsn:
+            raise RuntimeError(
+                "POSTGRES_URL environment variable is not set. "
+                "Add it as a secret in your HuggingFace Space settings "
+                "(e.g. postgres://user:password@host:5432/dbname)."
+            )
+        try:
+            pool = await asyncpg.create_pool(
+                dsn,
+                init=_init_conn,
+                min_size=int(os.getenv("PG_POOL_MIN", "1")),
+                max_size=int(os.getenv("PG_POOL_MAX", "10")),
+                command_timeout=30,
+            )
+        except OSError as exc:
+            raise RuntimeError(
+                f"Cannot reach the PostgreSQL server — DNS or network error: {exc}. "
+                "Check that POSTGRES_URL contains a publicly reachable hostname."
+            ) from exc
+        except asyncpg.InvalidPasswordError as exc:
+            raise RuntimeError(
+                f"PostgreSQL authentication failed: {exc}. "
+                "Check the username/password in POSTGRES_URL."
+            ) from exc
+        except Exception as exc:
+            raise RuntimeError(
+                f"Failed to connect to PostgreSQL: {exc}"
+            ) from exc
 
         async def close() -> None:
             await pool.close()

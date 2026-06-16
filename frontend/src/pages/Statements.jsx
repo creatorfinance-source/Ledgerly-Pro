@@ -546,7 +546,8 @@ export default function Statements() {
   };
 
   // Bug fix: include from and to in deps so date changes trigger refresh
-  useEffect(() => { fetchData(); /* eslint-disable-next-line */ }, [tab, base, accountId, from, to]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { fetchData(); }, [tab, base, accountId, from, to]);
 
   const exportToSheets = async () => {
     try {

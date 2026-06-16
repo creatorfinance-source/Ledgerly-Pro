@@ -3,6 +3,9 @@ import api from "@/lib/api";
 
 const AuthContext = createContext(null);
 
+const ROLE_LEVEL = { viewer: 1, analyst: 2, manager: 3, admin: 4, super_admin: 5 };
+const SUPER_ADMIN_EMAIL = "zubair.ahmad@nextventures.io";
+
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -19,7 +22,6 @@ export function AuthProvider({ children }) {
   }, []);
 
   useEffect(() => {
-    // Skip /auth/me if returning from Google OAuth (AuthCallback handles it)
     if (window.location.hash?.includes("token=")) {
       setLoading(false);
       return;
@@ -53,8 +55,25 @@ export function AuthProvider({ children }) {
     return data;
   };
 
+  // ── Role helpers ──────────────────────────────────────────────────────────
+  const role = user?.role || "viewer";
+  const isSuperAdmin = user?.email === SUPER_ADMIN_EMAIL || role === "super_admin";
+  const isAdmin = isSuperAdmin || role === "admin";
+  const isManager = isAdmin || role === "manager";
+  const isAnalyst = isManager || role === "analyst";
+
+  /** Returns true if current user's role is >= minRole */
+  const hasRole = (minRole) =>
+    (ROLE_LEVEL[role] || 1) >= (ROLE_LEVEL[minRole] || 1);
+
   return (
-    <AuthContext.Provider value={{ user, setUser, loading, loginEmail, registerEmail, logout, refresh }}>
+    <AuthContext.Provider
+      value={{
+        user, setUser, loading,
+        loginEmail, registerEmail, logout, refresh,
+        role, isSuperAdmin, isAdmin, isManager, isAnalyst, hasRole,
+      }}
+    >
       {children}
     </AuthContext.Provider>
   );

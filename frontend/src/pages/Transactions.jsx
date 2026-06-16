@@ -6,8 +6,9 @@ import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Card } from "@/components/ui/card";
-import { Plus, Trash2, Pencil, Receipt } from "lucide-react";
+import { Plus, Trash2, Pencil, Receipt, Filter, Search } from "lucide-react";
 import { toast } from "sonner";
+import { cn } from "@/lib/utils";
 
 const DEFAULT_FORM = () => ({
   date: new Date().toISOString().slice(0, 10),
@@ -31,9 +32,11 @@ export default function Transactions() {
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState(DEFAULT_FORM());
   const [editing, setEditing] = useState(null);
-  const [filter, setFilter] = useState({ source: "", account_id: "" });
+  const [filter, setFilter] = useState({ source: "", account_id: "", search: "" });
+  const [loading, setLoading] = useState(false);
 
   const load = async () => {
+    setLoading(true);
     try {
       const params = {};
       if (filter.source) params.source = filter.source;
@@ -43,10 +46,18 @@ export default function Transactions() {
       setAccounts(a.data);
     } catch {
       toast.error("Failed to load transactions");
+    } finally {
+      setLoading(false);
     }
   };
 
   useEffect(() => { load(); }, [filter.source, filter.account_id]); // eslint-disable-line
+
+  const filteredItems = items.filter(t => 
+    t.description.toLowerCase().includes(filter.search.toLowerCase()) ||
+    t.category?.toLowerCase().includes(filter.search.toLowerCase()) ||
+    t.vendor?.toLowerCase().includes(filter.search.toLowerCase())
+  );
 
   const submit = async () => {
     try {
@@ -96,15 +107,31 @@ export default function Transactions() {
   const set = (key, val) => setForm((f) => ({ ...f, [key]: val }));
 
   return (
-    <div className="p-6 md:p-8" data-testid="transactions-page">
-      <div className="flex items-end justify-between mb-8 gap-4 flex-wrap">
-        <div>
-          <div className="label-eyebrow">Ledger</div>
-          <h1 className="mt-2 text-3xl md:text-4xl font-light tracking-tight" style={{ fontFamily: "Outfit" }}>Transactions</h1>
+    <div className="p-6 md:p-8 max-w-[1600px] mx-auto" data-testid="transactions-page">
+      <div className="flex flex-col lg:flex-row lg:items-end justify-between mb-8 gap-6">
+        <div className="animate-in fade-in slide-in-from-left-4 duration-500">
+          <div className="label-eyebrow text-muted-foreground">Ledger</div>
+          <h1 className="mt-2 text-3xl md:text-4xl font-light tracking-tight text-foreground" style={{ fontFamily: "Outfit" }}>Transactions</h1>
         </div>
-        <div className="flex gap-2 items-center">
+        
+        <div className="flex flex-wrap gap-3 items-center animate-in fade-in slide-in-from-right-4 duration-500">
+          <div className="relative w-full sm:w-64">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+            <Input 
+              placeholder="Search description, category..." 
+              className="pl-9 h-10 border-border bg-card"
+              value={filter.search}
+              onChange={(e) => setFilter(f => ({ ...f, search: e.target.value }))}
+            />
+          </div>
+
           <Select value={filter.source || "all"} onValueChange={(v) => setFilter((f) => ({ ...f, source: v === "all" ? "" : v }))}>
-            <SelectTrigger className="w-40 h-10" data-testid="filter-source"><SelectValue placeholder="All sources" /></SelectTrigger>
+            <SelectTrigger className="w-full sm:w-40 h-10 border-border bg-card" data-testid="filter-source">
+              <div className="flex items-center gap-2">
+                <Filter className="w-3.5 h-3.5 text-muted-foreground" />
+                <SelectValue placeholder="All sources" />
+              </div>
+            </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All sources</SelectItem>
               <SelectItem value="manual">Manual</SelectItem>
@@ -116,19 +143,29 @@ export default function Transactions() {
               <SelectItem value="import">Import</SelectItem>
             </SelectContent>
           </Select>
+
           <Dialog open={open} onOpenChange={(v) => { setOpen(v); if (!v) { setEditing(null); setForm(DEFAULT_FORM()); } }}>
             <DialogTrigger asChild>
-              <Button className="bg-moss hover:bg-[#3D5247] text-white" data-testid="add-transaction-btn"><Plus className="w-4 h-4 mr-1" /> New transaction</Button>
+              <Button className="w-full sm:w-auto h-10 bg-primary text-primary-foreground hover:opacity-90" data-testid="add-transaction-btn">
+                <Plus className="w-4 h-4 mr-1.5" /> New transaction
+              </Button>
             </DialogTrigger>
-            <DialogContent className="max-w-2xl">
-              <DialogHeader><DialogTitle style={{ fontFamily: "Outfit" }}>{editing ? "Edit transaction" : "New transaction"}</DialogTitle></DialogHeader>
-              <div className="space-y-4 max-h-[70vh] overflow-y-auto pr-1">
-                {/* Row 1: Date + Type */}
-                <div className="grid grid-cols-2 gap-3">
-                  <div><Label>Date</Label><Input type="date" value={form.date} onChange={(e) => set("date", e.target.value)} className="mt-1.5" data-testid="txn-date-input" /></div>
-                  <div><Label>Type</Label>
+            <DialogContent className="max-w-2xl bg-card border-border">
+              <DialogHeader>
+                <DialogTitle style={{ fontFamily: "Outfit" }} className="text-2xl font-light">
+                  {editing ? "Edit transaction" : "New transaction"}
+                </DialogTitle>
+              </DialogHeader>
+              <div className="space-y-5 max-h-[70vh] overflow-y-auto pr-2 scrollbar-thin">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <Label className="text-xs text-muted-foreground uppercase tracking-wider">Date</Label>
+                    <Input type="date" value={form.date} onChange={(e) => set("date", e.target.value)} className="bg-background" data-testid="txn-date-input" />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs text-muted-foreground uppercase tracking-wider">Type</Label>
                     <Select value={form.type} onValueChange={(v) => set("type", v)}>
-                      <SelectTrigger className="mt-1.5" data-testid="txn-type-select"><SelectValue /></SelectTrigger>
+                      <SelectTrigger className="bg-background" data-testid="txn-type-select"><SelectValue /></SelectTrigger>
                       <SelectContent>
                         <SelectItem value="credit">Credit (income)</SelectItem>
                         <SelectItem value="debit">Debit (expense)</SelectItem>
@@ -136,47 +173,76 @@ export default function Transactions() {
                     </Select>
                   </div>
                 </div>
-                {/* Row 2: Description */}
-                <div><Label>Description</Label><Input value={form.description} onChange={(e) => set("description", e.target.value)} className="mt-1.5" data-testid="txn-desc-input" /></div>
-                {/* Row 3: Amount + Currency */}
-                <div className="grid grid-cols-2 gap-3">
-                  <div><Label>Amount</Label><Input type="number" step="0.01" value={form.amount} onChange={(e) => set("amount", e.target.value)} className="mt-1.5" data-testid="txn-amount-input" /></div>
-                  <div><Label>Currency</Label>
+
+                <div className="space-y-1.5">
+                  <Label className="text-xs text-muted-foreground uppercase tracking-wider">Description</Label>
+                  <Input value={form.description} onChange={(e) => set("description", e.target.value)} className="bg-background" data-testid="txn-desc-input" />
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <Label className="text-xs text-muted-foreground uppercase tracking-wider">Amount</Label>
+                    <Input type="number" step="0.01" value={form.amount} onChange={(e) => set("amount", e.target.value)} className="bg-background" data-testid="txn-amount-input" />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs text-muted-foreground uppercase tracking-wider">Currency</Label>
                     <Select value={form.currency} onValueChange={(v) => set("currency", v)}>
-                      <SelectTrigger className="mt-1.5" data-testid="txn-currency-select"><SelectValue /></SelectTrigger>
+                      <SelectTrigger className="bg-background" data-testid="txn-currency-select"><SelectValue /></SelectTrigger>
                       <SelectContent>{CURRENCIES.map((c) => <SelectItem key={c.code} value={c.code}>{c.code}</SelectItem>)}</SelectContent>
                     </Select>
                   </div>
                 </div>
-                {/* Row 4: Account */}
-                <div><Label>Account</Label>
+
+                <div className="space-y-1.5">
+                  <Label className="text-xs text-muted-foreground uppercase tracking-wider">Account</Label>
                   <Select value={form.account_id} onValueChange={(v) => set("account_id", v)}>
-                    <SelectTrigger className="mt-1.5" data-testid="txn-account-select"><SelectValue placeholder="Select account" /></SelectTrigger>
+                    <SelectTrigger className="bg-background" data-testid="txn-account-select"><SelectValue placeholder="Select account" /></SelectTrigger>
                     <SelectContent>{accounts.map((a) => <SelectItem key={a.account_id} value={a.account_id}>{a.code} · {a.name}</SelectItem>)}</SelectContent>
                   </Select>
                 </div>
-                {/* Row 5: Month + Department */}
-                <div className="grid grid-cols-2 gap-3">
-                  <div><Label>Month</Label><Input placeholder="e.g. Jan-2026" value={form.month} onChange={(e) => set("month", e.target.value)} className="mt-1.5" /></div>
-                  <div><Label>Department</Label><Input placeholder="e.g. MARKETING" value={form.department} onChange={(e) => set("department", e.target.value)} className="mt-1.5" /></div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <Label className="text-xs text-muted-foreground uppercase tracking-wider">Month</Label>
+                    <Input placeholder="e.g. Jan-2026" value={form.month} onChange={(e) => set("month", e.target.value)} className="bg-background" />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs text-muted-foreground uppercase tracking-wider">Department</Label>
+                    <Input placeholder="e.g. MARKETING" value={form.department} onChange={(e) => set("department", e.target.value)} className="bg-background" />
+                  </div>
                 </div>
-                {/* Row 6: Category + Subcategory */}
-                <div className="grid grid-cols-2 gap-3">
-                  <div><Label>Category</Label><Input value={form.category} onChange={(e) => set("category", e.target.value)} className="mt-1.5" data-testid="txn-category-input" /></div>
-                  <div><Label>Subcategory</Label><Input value={form.subcategory} onChange={(e) => set("subcategory", e.target.value)} className="mt-1.5" /></div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <Label className="text-xs text-muted-foreground uppercase tracking-wider">Category</Label>
+                    <Input value={form.category} onChange={(e) => set("category", e.target.value)} className="bg-background" data-testid="txn-category-input" />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs text-muted-foreground uppercase tracking-wider">Subcategory</Label>
+                    <Input value={form.subcategory} onChange={(e) => set("subcategory", e.target.value)} className="bg-background" />
+                  </div>
                 </div>
-                {/* Row 7: Ledger + Vendor */}
-                <div className="grid grid-cols-2 gap-3">
-                  <div><Label>Ledger</Label><Input value={form.ledger} onChange={(e) => set("ledger", e.target.value)} className="mt-1.5" /></div>
-                  <div><Label>Vendor</Label><Input value={form.vendor} onChange={(e) => set("vendor", e.target.value)} className="mt-1.5" /></div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <Label className="text-xs text-muted-foreground uppercase tracking-wider">Ledger</Label>
+                    <Input value={form.ledger} onChange={(e) => set("ledger", e.target.value)} className="bg-background" />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs text-muted-foreground uppercase tracking-wider">Vendor</Label>
+                    <Input value={form.vendor} onChange={(e) => set("vendor", e.target.value)} className="bg-background" />
+                  </div>
                 </div>
-                {/* Row 8: txId */}
-                <div><Label>Transaction ID (txId)</Label><Input placeholder="e.g. 1012026-001" value={form.tx_id} onChange={(e) => set("tx_id", e.target.value)} className="mt-1.5" /></div>
+
+                <div className="space-y-1.5">
+                  <Label className="text-xs text-muted-foreground uppercase tracking-wider">Transaction ID (txId)</Label>
+                  <Input placeholder="e.g. 1012026-001" value={form.tx_id} onChange={(e) => set("tx_id", e.target.value)} className="bg-background" />
+                </div>
               </div>
-              <DialogFooter>
-                <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
-                <Button onClick={submit} disabled={!form.description || !form.amount || !form.account_id} className="bg-moss hover:bg-[#3D5247] text-white" data-testid="txn-submit-btn">
-                  {editing ? "Save" : "Add"}
+              <DialogFooter className="border-t border-border pt-4">
+                <Button variant="outline" onClick={() => setOpen(false)} className="border-border text-muted-foreground">Cancel</Button>
+                <Button onClick={submit} disabled={!form.description || !form.amount || !form.account_id} className="bg-primary text-primary-foreground hover:opacity-90" data-testid="txn-submit-btn">
+                  {editing ? "Save changes" : "Add transaction"}
                 </Button>
               </DialogFooter>
             </DialogContent>
@@ -184,60 +250,77 @@ export default function Transactions() {
         </div>
       </div>
 
-      <Card className="surface-card overflow-hidden">
+      <Card className="surface-card overflow-hidden animate-in fade-in slide-in-from-bottom-4 duration-700">
         <div className="overflow-x-auto">
-          <table className="w-full text-sm" style={{ minWidth: "1100px" }}>
+          <table className="w-full text-sm">
             <thead>
-              <tr className="text-left bg-[#F9F8F6]">
-                <th className="px-4 py-3 label-eyebrow text-[10px] whitespace-nowrap">Month</th>
-                <th className="px-4 py-3 label-eyebrow text-[10px] whitespace-nowrap">Date</th>
-                <th className="px-4 py-3 label-eyebrow text-[10px]">Description</th>
-                <th className="px-4 py-3 label-eyebrow text-[10px] whitespace-nowrap">Department</th>
-                <th className="px-4 py-3 label-eyebrow text-[10px] whitespace-nowrap">Category</th>
-                <th className="px-4 py-3 label-eyebrow text-[10px] whitespace-nowrap">Subcategory</th>
-                <th className="px-4 py-3 label-eyebrow text-[10px] whitespace-nowrap">Ledger</th>
-                <th className="px-4 py-3 label-eyebrow text-[10px]">Vendor</th>
-                <th className="px-4 py-3 label-eyebrow text-[10px] text-right whitespace-nowrap">Amount</th>
-                <th className="px-4 py-3 label-eyebrow text-[10px] whitespace-nowrap">txId</th>
-                <th className="px-4 py-3 label-eyebrow text-[10px] text-right whitespace-nowrap">Actions</th>
+              <tr className="text-left bg-muted/30 border-b border-border">
+                <th className="px-4 py-4 label-eyebrow text-[10px] text-muted-foreground whitespace-nowrap">Month</th>
+                <th className="px-4 py-4 label-eyebrow text-[10px] text-muted-foreground whitespace-nowrap">Date</th>
+                <th className="px-4 py-4 label-eyebrow text-[10px] text-muted-foreground">Description</th>
+                <th className="px-4 py-4 label-eyebrow text-[10px] text-muted-foreground whitespace-nowrap hidden md:table-cell">Department</th>
+                <th className="px-4 py-4 label-eyebrow text-[10px] text-muted-foreground whitespace-nowrap hidden lg:table-cell">Category</th>
+                <th className="px-4 py-4 label-eyebrow text-[10px] text-muted-foreground whitespace-nowrap text-right">Amount</th>
+                <th className="px-4 py-4 label-eyebrow text-[10px] text-muted-foreground whitespace-nowrap text-right">Actions</th>
               </tr>
             </thead>
-            <tbody>
-              {items.length === 0 ? (
-                <tr><td colSpan="11" className="px-6 py-16 text-center">
-                  <div className="flex flex-col items-center gap-2">
-                    <div className="w-10 h-10 rounded-full bg-[#F2F0ED] flex items-center justify-center"><Receipt className="w-5 h-5 text-[#5C5C5C]" strokeWidth={1.5} /></div>
-                    <div className="text-sm font-medium text-[#1A1A1A]">No transactions yet</div>
-                    <div className="text-xs text-[#5C5C5C]">Add a transaction manually or import from Integrations.</div>
+            <tbody className="divide-y divide-border">
+              {loading ? (
+                Array.from({ length: 5 }).map((_, i) => (
+                  <tr key={i}>
+                    <td colSpan="7" className="px-4 py-4"><div className="h-6 bg-muted rounded animate-pulse w-full" /></td>
+                  </tr>
+                ))
+              ) : filteredItems.length === 0 ? (
+                <tr><td colSpan="7" className="px-6 py-20 text-center">
+                  <div className="flex flex-col items-center gap-3">
+                    <div className="w-12 h-12 rounded-full bg-secondary flex items-center justify-center">
+                      <Receipt className="w-6 h-6 text-muted-foreground" strokeWidth={1.5} />
+                    </div>
+                    <div>
+                      <div className="text-base font-medium text-foreground">No transactions found</div>
+                      <div className="text-sm text-muted-foreground max-w-xs mx-auto mt-1">
+                        {filter.search ? "Try a different search term or clear the filters." : "Add your first transaction manually or connect an integration to sync data."}
+                      </div>
+                    </div>
+                    {filter.search && (
+                      <Button variant="ghost" size="sm" onClick={() => setFilter(f => ({ ...f, search: "" }))} className="text-primary mt-2">
+                        Clear search
+                      </Button>
+                    )}
                   </div>
                 </td></tr>
-              ) : items.map((t) => (
-                <tr key={t.txn_id} className="border-t border-cream hover:bg-[#F9F8F6]">
-                  <td className="px-4 py-3 text-[#5C5C5C] whitespace-nowrap text-xs">{t.month || "—"}</td>
-                  <td className="px-4 py-3 text-[#5C5C5C] whitespace-nowrap">{fmtDate(t.date)}</td>
-                  <td className="px-4 py-3 text-[#1A1A1A] max-w-[200px]">
-                    <span className="block truncate" title={t.description}>{t.description}</span>
+              ) : filteredItems.map((t, idx) => (
+                <tr key={t.txn_id} className="hover:bg-muted/30 transition-colors group">
+                  <td className="px-4 py-4 text-muted-foreground whitespace-nowrap text-xs">{t.month || "—"}</td>
+                  <td className="px-4 py-4 text-muted-foreground whitespace-nowrap">{fmtDate(t.date)}</td>
+                  <td className="px-4 py-4">
+                    <div className="flex flex-col gap-0.5">
+                      <span className="text-foreground font-medium truncate max-w-[180px] sm:max-w-[300px]" title={t.description}>{t.description}</span>
+                      <span className="text-[10px] text-muted-foreground uppercase tracking-wider lg:hidden">{t.category || "Uncategorized"}</span>
+                    </div>
                   </td>
-                  <td className="px-4 py-3 text-xs text-[#5C5C5C] whitespace-nowrap">{t.department || "—"}</td>
-                  <td className="px-4 py-3 text-xs text-[#5C5C5C] max-w-[140px]">
-                    <span className="block truncate" title={t.category}>{t.category || "—"}</span>
+                  <td className="px-4 py-4 text-xs text-muted-foreground whitespace-nowrap hidden md:table-cell">{t.department || "—"}</td>
+                  <td className="px-4 py-4 text-xs text-muted-foreground whitespace-nowrap hidden lg:table-cell">
+                    <span className="px-2 py-0.5 rounded-full border border-border bg-secondary/50 truncate max-w-[120px] block" title={t.category}>
+                      {t.category || "—"}
+                    </span>
                   </td>
-                  <td className="px-4 py-3 text-xs text-[#5C5C5C] max-w-[140px]">
-                    <span className="block truncate" title={t.subcategory}>{t.subcategory || "—"}</span>
-                  </td>
-                  <td className="px-4 py-3 text-xs text-[#5C5C5C] max-w-[140px]">
-                    <span className="block truncate" title={t.ledger}>{t.ledger || "—"}</span>
-                  </td>
-                  <td className="px-4 py-3 text-xs text-[#5C5C5C] max-w-[160px]">
-                    <span className="block truncate" title={t.vendor}>{t.vendor || "—"}</span>
-                  </td>
-                  <td className={`px-4 py-3 text-right numeric whitespace-nowrap ${t.type === "credit" ? "text-moss" : "text-terracotta"}`}>
+                  <td className={cn(
+                    "px-4 py-4 text-right numeric whitespace-nowrap font-medium",
+                    t.type === "credit" ? "text-primary" : "text-destructive"
+                  )}>
                     {t.type === "credit" ? "+" : "-"}{fmtCurrency(t.amount, t.currency)}
                   </td>
-                  <td className="px-4 py-3 text-xs text-[#5C5C5C] font-mono whitespace-nowrap">{t.tx_id || "—"}</td>
-                  <td className="px-4 py-3 text-right whitespace-nowrap">
-                    <button onClick={() => startEdit(t)} className="p-1.5 text-[#5C5C5C] hover:text-moss" data-testid={`edit-txn-${t.txn_id}`}><Pencil className="w-4 h-4" /></button>
-                    <button onClick={() => remove(t.txn_id)} className="p-1.5 text-[#5C5C5C] hover:text-terracotta" data-testid={`delete-txn-${t.txn_id}`}><Trash2 className="w-4 h-4" /></button>
+                  <td className="px-4 py-4 text-right whitespace-nowrap">
+                    <div className="flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary" onClick={() => startEdit(t)}>
+                        <Pencil className="w-3.5 h-3.5" />
+                      </Button>
+                      <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-destructive" onClick={() => remove(t.txn_id)}>
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </Button>
+                    </div>
                   </td>
                 </tr>
               ))}

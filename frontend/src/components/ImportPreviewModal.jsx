@@ -84,7 +84,6 @@ function SortableColHeader({ id, header, mapping, onMappingChange, sortKey, sort
     zIndex: isDragging ? 10 : undefined,
     position: "relative",
   };
-
   return (
     <th
       ref={setNodeRef}
@@ -208,6 +207,7 @@ export default function ImportPreviewModal({ open, onClose, onImport, accounts =
     if (accounts.length > 0 && !targetAccount) {
       setTargetAccount(accounts[0].account_id);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accounts]);
 
   // Reset state when modal closes

@@ -48,13 +48,26 @@ async def startup_db() -> None:
 
     if backend == "postgres":
         from .postgres_db import PostgresDatabaseProxy, create_postgres_schema
-        proxy, close = await PostgresDatabaseProxy.create()
+        try:
+            proxy, close = await PostgresDatabaseProxy.create()
+        except RuntimeError as exc:
+            raise RuntimeError(
+                f"[DB_BACKEND=postgres] {exc}\n\n"
+                "Make sure POSTGRES_URL is set to a publicly accessible PostgreSQL "
+                "connection string in your deployment secrets."
+            ) from exc
         await create_postgres_schema(proxy)
         _db_instance = proxy
         _close_fn = close
     else:
         from .mongo_db import MongoDatabaseProxy
-        proxy, close = await MongoDatabaseProxy.create()
+        try:
+            proxy, close = await MongoDatabaseProxy.create()
+        except Exception as exc:
+            raise RuntimeError(
+                f"[DB_BACKEND=mongo] Failed to connect to MongoDB: {exc}\n\n"
+                "Make sure MONGO_URL is set in your deployment secrets."
+            ) from exc
         _db_instance = proxy
         _close_fn = close
 

@@ -34,6 +34,7 @@ class UserPublic(BaseModel):
     phone: Optional[str] = ""
     timezone: Optional[str] = "UTC"
     bio: Optional[str] = ""
+    role: str = "viewer"
 
 
 class RegisterPayload(BaseModel):
@@ -277,3 +278,34 @@ class SettingsUpdate(BaseModel):
     phone: Optional[str] = None
     timezone: Optional[str] = None
     bio: Optional[str] = None
+
+
+# ── RBAC ─────────────────────────────────────────────────────────────────────
+
+ROLES = ["viewer", "analyst", "manager", "admin", "super_admin"]
+
+class RoleAssign(BaseModel):
+    role: Literal["viewer", "analyst", "manager", "admin", "super_admin"]
+
+
+# ── Automations ───────────────────────────────────────────────────────────────
+
+TRIGGER_TYPES = ["schedule", "transaction_created", "invoice_overdue", "balance_threshold"]
+ACTION_TYPES  = ["notify", "tag_transaction", "generate_report", "create_journal_entry"]
+
+class AutomationCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    description: str = ""
+    trigger_type: Literal["schedule", "transaction_created", "invoice_overdue", "balance_threshold"]
+    trigger_config: dict = {}
+    action_type: Literal["notify", "tag_transaction", "generate_report", "create_journal_entry"]
+    action_config: dict = {}
+
+class AutomationUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    trigger_type: Optional[Literal["schedule", "transaction_created", "invoice_overdue", "balance_threshold"]] = None
+    trigger_config: Optional[dict] = None
+    action_type: Optional[Literal["notify", "tag_transaction", "generate_report", "create_journal_entry"]] = None
+    action_config: Optional[dict] = None
+    is_active: Optional[bool] = None
